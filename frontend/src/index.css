@@ -1,0 +1,97 @@
+/* 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供 */
+
+:root {
+  /* 頂級極黑藍紫背景 */
+  --bg-dark: #0e121a;
+  
+  /* 面板毛玻璃與對話框背景 */
+  --panel-bg: rgba(22, 28, 40, 0.95);
+  
+  /* 強調色：充滿科技感的藍色 */
+  --accent: #58a6ff;
+  --accent-hover: #79c0ff;
+  
+  /* 字體顏色 */
+  --text-main: #e0e6ed;
+  --text-muted: #8b949e;
+  
+  /* 邊框線條 */
+  --border-light: rgba(255, 255, 255, 0.12);
+  --border-panel: rgba(255, 255, 255, 0.10);
+  
+  /* 表格圖層欄位亮點色 */
+  --table-filled: #ffd700;
+  --table-planes: #58a6ff;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100vh;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  /* 英數字型使用 Calibri，中文強制使用微軟正黑體 */
+  font-family: 'Calibri', 'Microsoft JhengHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* 工程介面通常不需要主捲軸，內容由 flex 撐開 */
+}
+
+/* 全幅排版容器 */
+.app-container {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  width: 100%;
+}
+
+/* 右側面板 */
+.glass-panel {
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  border-left: 1px solid var(--border-panel);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 按鈕美化 */
+.premium-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 12px rgba(88, 166, 255, 0.25);
+}
+
+.premium-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(88, 166, 255, 0.35);
+}
+
+.premium-btn:disabled {
+  background: #21262d;
+  color: #8b949e;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* 捲軸美化 (Webkit) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
