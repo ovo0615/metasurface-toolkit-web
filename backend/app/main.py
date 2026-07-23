@@ -98,8 +98,8 @@ async def upload_data(file: UploadFile = File(...)):
 
 @app.post("/api/upload_project")
 def upload_project(file: UploadFile = File(...)):
-    """上傳 UnitCell 專案檔（.aedt 或 .aedtz），存為 <名稱>_array.aedt 供產生陣列使用。
-    不需要（也不應該）先在 AEDT 中開啟原始專案。"""
+    """上傳 UnitCell 專案檔（.aedt 或 .aedtz），存為母本 <名稱>_master.aedt。
+    每次建模自動從母本複製新副本，不需要（也不應該）先在 AEDT 中開啟原始專案。"""
     try:
         lower = file.filename.lower()
         if not (lower.endswith('.aedt') or lower.endswith('.aedtz')):
@@ -110,8 +110,9 @@ def upload_project(file: UploadFile = File(...)):
         with open(raw_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 統一整理成 <stem>_array.aedt（改名可避免與使用者已開啟的同名專案衝突）
-        target = os.path.join(static_dir, f"{stem}_array.aedt")
+        # 存為母本 <stem>_master.aedt；每次建模會從母本複製新的 <stem>_array.aedt，
+        # 因此重複建模不需重新上傳，也不會疊在上一次的結果上
+        target = os.path.join(static_dir, f"{stem}_master.aedt")
         if os.path.exists(target):
             os.remove(target)
 
@@ -131,7 +132,7 @@ def upload_project(file: UploadFile = File(...)):
         with open(_project_marker, "w", encoding="utf-8") as f:
             f.write(target)
 
-        return {"status": "success", "message": f"專案已上傳（{os.path.basename(target)}）。設定好參數後即可按「產生模型」。"}
+        return {"status": "success", "message": f"專案已上傳（母本：{os.path.basename(target)}）。設定好參數後即可按「產生模型」；重複建模會自動從母本重新開始。"}
     except HTTPException:
         raise
     except Exception as e:
@@ -223,17 +224,34 @@ _gen_lock = threading.Lock()
 
 def _run_generate(config: ArrayConfig):
     """實際的建模流程，在背景執行緒中執行，隨時更新 _gen 進度並回應取消要求。"""
-    from ansys.aedt.core import Hfss
+    from ansys.aedt.core import Hfss, Desktop
     hfss = None
-    project_path = _get_current_project()
+    master_path = _get_current_project()
     try:
         res = generate_preview(config)
         elements = res["elements"]
         N = config.num_elements
         _gen.update(total=len(elements), current=0, phase="開啟專案中")
 
-        hfss = Hfss(project=project_path, non_graphical=False, new_desktop=False)
+        # 從母本複製全新工作副本（每次建模都是乾淨狀態）
+        if master_path.endswith("_master.aedt"):
+            project_path = master_path[: -len("_master.aedt")] + "_array.aedt"
+        else:
+            project_path = master_path  # 相容舊版上傳（無母本）
         project_name = os.path.splitext(os.path.basename(project_path))[0]
+
+        # 若上一次的副本仍開啟於 AEDT，先關閉（不存檔）以釋放檔案鎖
+        desktop = Desktop(new_desktop=False, non_graphical=False)
+        if project_name in desktop.project_list:
+            desktop.odesktop.CloseProject(project_name)
+
+        if master_path.endswith("_master.aedt"):
+            lock = project_path + ".lock"
+            if os.path.exists(lock):
+                os.remove(lock)
+            shutil.copy(master_path, project_path)
+
+        hfss = Hfss(project=project_path, non_graphical=False, new_desktop=False)
 
         def cancelled():
             if _gen["cancel"]:
@@ -258,6 +276,7 @@ def _run_generate(config: ArrayConfig):
         _gen["phase"] = "分類物件中"
         pattern_names, background_names, excluded_names = [], [], []
         zmin_mu, zmax_mu = None, None
+        bg_max_mu = 0.0
         for name in hfss.modeler.object_names:
             try:
                 mat = (hfss.modeler[name].material_name or "").lower()
@@ -272,8 +291,31 @@ def _run_generate(config: ArrayConfig):
             dx, dy = bb[3] - bb[0], bb[4] - bb[1]
             if dx >= 0.95 * pitch_mu and dy >= 0.95 * pitch_mu:
                 background_names.append(name)
+                bg_max_mu = max(bg_max_mu, dx, dy)
             else:
                 pattern_names.append(name)
+
+        # 防呆：背景層（基板／接地）的尺寸就是專案真正的 unit cell 尺寸，
+        # 與使用者填的 Unit Cell Size 不符時直接擋下，避免建出錯誤模型
+        if background_names:
+            detected_mm = bg_max_mu * unit_to_mm
+            if abs(detected_mm - config.unit_cell_size) / detected_mm > 0.10:
+                freq_hint = ""
+                try:
+                    fstr = str(hfss.setups[0].props.get("Frequency", "")).strip()
+                    if fstr:
+                        freq_hint = f"，Frequency 建議對應專案 Setup 的 {fstr}"
+                except Exception:
+                    pass
+                _gen["error"] = (
+                    f"參數與專案不符：偵測到專案的 unit cell 尺寸約為 {detected_mm:.4g} mm，"
+                    f"但 Unit Cell Size 填的是 {config.unit_cell_size} mm。"
+                    f"請將 Unit Cell Size 改為 {detected_mm:.4g} mm{freq_hint}，再重新產生。")
+                try:
+                    hfss.odesktop.CloseProject(project_name)
+                except Exception:
+                    pass
+                return
 
         if not pattern_names:
             _gen["error"] = (f"找不到比 unit cell（{config.unit_cell_size}mm）小的圖樣物件可以縮放！"
