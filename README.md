@@ -7,9 +7,13 @@
 ## 功能
 
 - **即時 2D 預覽**：參數改變即時重算陣列佈局（Canvas 平移／縮放）。
-- **即時 3D 預覽**：上傳 UnitCell 模型（`.obj` 或 `.aedtz`）後，以 Three.js Instanced Mesh 顯示整個陣列。
 - **相位資料表上傳**：支援 `.csv` 與 `.xlsx`，需含 `phase` 與 `Lx` 欄位（內建 `Phase_dim_PG_45.csv`，140 GHz 蝴蝶結單元、cell 1 mm、Lx 20–270 µm）。
-- **HFSS 一鍵建模**：連線至目前開啟的 AEDT，將名為 `UnitCell` 的物件依每格 Lx「複製 → 等比縮放（X/Y）→ 移動定位」產生陣列，完成後原始 UnitCell 自動設為非模型物件。
+- **HFSS 一鍵建模（全自動）**：上傳 UnitCell 專案檔（`.aedt`／`.aedtz`，**不需先在 AEDT 開啟**），
+  工具會自動開啟專案副本並分類物件：
+  - 真空／空氣（輻射盒）→ 設為非模型
+  - XY 尺寸接近 cell 尺寸 → 背景層（基板／接地），放大 N 倍成整板
+  - 其餘 → 單元圖樣，逐格依 Lx「複製 → 等比縮放 → 定位」
+  完成後存成 `<名稱>_array.aedt`，直接顯示在 AEDT 中。
 
 ## 系統需求（需預先安裝）
 
@@ -32,12 +36,14 @@
 
 ## 操作流程
 
-1. （選用）上傳自己的相位對照表（`.csv` / `.xlsx`，含 `phase` 與 `Lx` 欄位，Lx 單位 µm）。
-2. 設定頻率、cell 尺寸、陣列數量、饋源座標與波束方向，2D 預覽即時更新。
-3. （選用）上傳 UnitCell 的 `.obj` 或 `.aedtz`，切換 3D 預覽。
-4. 在 AEDT 中開啟含有 `UnitCell` 物件的 HFSS 專案（物件建議置中於原點）。
-5. 按「產生模型」，工具會直接在 HFSS 中建出完整陣列。
-6. 完成後按「釋放 AEDT」中斷 PyAEDT 連線。
+1. 「選擇 Excel / CSV」上傳相位對照表（含 `phase` 與 `Lx` 欄位，Lx 單位 µm），2D 預覽隨即顯示。
+2. 設定頻率、cell 尺寸、陣列數量、饋源座標與波束方向，預覽即時更新。
+3. 「選擇 UnitCell 專案檔」上傳 `.aedt` 或 `.aedtz`（不需先在 AEDT 開啟該專案）。
+4. 按「產生模型」——工具自動開啟專案副本、分類物件並建出完整陣列
+   （若 AEDT 已在執行會直接開在同一視窗，否則自動啟動）。
+5. 完成後按「釋放 AEDT」中斷 PyAEDT 連線。
+
+> 注意：Unit Cell Size 需與專案中單元的實際尺寸一致，物件自動分類以此判斷「背景層」與「圖樣」。
 
 ## 設計公式
 
@@ -54,7 +60,7 @@
 ```
 backend/app/main.py        FastAPI：相位計算、CSV 內插、PyAEDT 建模
 frontend/src/App.tsx       參數面板與預覽資料組裝
-frontend/src/components/   Preview2D（Canvas）、Preview3D（Three.js）
+frontend/src/components/   Preview2D（Canvas 2D 預覽）
 start.ps1                  一鍵啟動（venv + 套件 + 前後端）
 Phase_dim_PG_45.csv        內建相位對照表（140 GHz）
 UnitCell140GHz.aedt        參考 HFSS 單元專案（a=1mm、Lx=140µm、Ly=Lx）

@@ -35,7 +35,16 @@ class ArrayConfig(BaseModel):
     feed_z: float
     beam_theta: float
     beam_phi: float
-    unitcell_name: str = "UnitCell"  # HFSS 中作為陣列基準的物件名稱
+
+# 記錄目前上傳的 UnitCell 專案檔路徑（寫入檔案，後端重啟後仍可用）
+_project_marker = os.path.join(static_dir, "current_project.txt")
+
+def _get_current_project():
+    if os.path.exists(_project_marker):
+        p = open(_project_marker, encoding="utf-8").read().strip()
+        if p and os.path.exists(p):
+            return p
+    return None
 
 # 全域存放目前相位陣列
 phase_data = np.array([-180, 180])
@@ -86,67 +95,46 @@ async def upload_data(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"讀取失敗: {str(e)}")
 
-def _export_stl(hfss, names):
-    """以 STL 格式匯出指定物件到 static/unitcell.stl（相容新舊 pyaedt API）。"""
+@app.post("/api/upload_project")
+def upload_project(file: UploadFile = File(...)):
+    """上傳 UnitCell 專案檔（.aedt 或 .aedtz），存為 <名稱>_array.aedt 供產生陣列使用。
+    不需要（也不應該）先在 AEDT 中開啟原始專案。"""
     try:
-        return hfss.modeler.export_3d_model(
-            file_name="unitcell", file_path=static_dir,
-            file_format=".stl", assignment_to_export=names)  # pyaedt >= 1.x
-    except TypeError:
-        return hfss.modeler.export_3d_model(
-            file_name=os.path.join(static_dir, "unitcell.stl"), assignment=names)  # 舊版
+        lower = file.filename.lower()
+        if not (lower.endswith('.aedt') or lower.endswith('.aedtz')):
+            raise HTTPException(status_code=400, detail="不支援的格式，請上傳 .aedt 或 .aedtz 專案檔")
 
-@app.post("/api/upload_model")
-def upload_model(file: UploadFile = File(...)):
-    # 注意：此端點為同步函式（def 而非 async def），
-    # FastAPI 會將其放入 threadpool 執行，避免 PyAEDT 的長時間作業卡住整個伺服器。
-    try:
-        allowed = ('.obj', '.stl', '.aedtz')
-        if not file.filename.lower().endswith(allowed):
-            raise HTTPException(status_code=400, detail="不支援的格式，請上傳 .obj、.stl 或 .aedtz")
-
-        file_path = os.path.join(static_dir, file.filename)
-        with open(file_path, "wb") as buffer:
+        stem = os.path.splitext(os.path.basename(file.filename))[0]
+        raw_path = os.path.join(static_dir, file.filename)
+        with open(raw_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 清除舊的預覽模型，避免前端載到過期檔案
-        for old in ("unitcell.obj", "unitcell.stl"):
-            old_p = os.path.join(static_dir, old)
-            if os.path.exists(old_p) and os.path.abspath(old_p) != os.path.abspath(file_path):
-                os.remove(old_p)
+        # 統一整理成 <stem>_array.aedt（改名可避免與使用者已開啟的同名專案衝突）
+        target = os.path.join(static_dir, f"{stem}_array.aedt")
+        if os.path.exists(target):
+            os.remove(target)
 
-        if file.filename.lower().endswith('.aedtz'):
-            # 背景啟動 PyAEDT（non-graphical）開啟壓縮專案並匯出 STL
-            from ansys.aedt.core import Hfss
-            hfss = Hfss(project=file_path, non_graphical=True, new_desktop=True)
-            try:
-                # 自動挑選要匯出的物件：排除真空／空氣（輻射盒等），保留金屬與介質
-                solids = []
-                for n in hfss.modeler.object_names:
-                    try:
-                        mat = (hfss.modeler[n].material_name or "").lower()
-                        if mat not in ("vacuum", "air"):
-                            solids.append(n)
-                    except Exception:
-                        solids.append(n)
-                names = solids + list(hfss.modeler.sheet_names)
-                if not names:
-                    raise RuntimeError("專案中沒有可匯出的物件")
-                _export_stl(hfss, names)
-            except Exception as ex:
-                hfss.release_desktop(close_projects=True, close_desktop=True)
-                raise HTTPException(status_code=500, detail=f"PyAEDT 匯出模型失敗: {str(ex)}")
-            hfss.release_desktop(close_projects=True, close_desktop=True)
-        elif file.filename.lower().endswith('.stl'):
-            shutil.copy(file_path, os.path.join(static_dir, "unitcell.stl"))
+        if lower.endswith('.aedtz'):
+            # .aedtz 是 zip 壓縮檔，取出其中的 .aedt 並改名
+            import zipfile
+            with zipfile.ZipFile(raw_path) as zf:
+                aedt_members = [m for m in zf.namelist() if m.lower().endswith('.aedt')]
+                if not aedt_members:
+                    raise HTTPException(status_code=400, detail="壓縮檔中找不到 .aedt 專案")
+                with zf.open(aedt_members[0]) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            os.remove(raw_path)
         else:
-            shutil.copy(file_path, os.path.join(static_dir, "unitcell.obj"))
+            shutil.move(raw_path, target)
 
-        return {"status": "success", "message": "模型上傳並轉換成功！可以切換至 3D 預覽。"}
+        with open(_project_marker, "w", encoding="utf-8") as f:
+            f.write(target)
+
+        return {"status": "success", "message": f"專案已上傳（{os.path.basename(target)}）。設定好參數後即可按「產生模型」。"}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"上傳模型失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"上傳專案失敗: {str(e)}")
 
 @app.post("/api/preview")
 def generate_preview(config: ArrayConfig):
@@ -216,10 +204,25 @@ _UNIT_TO_MM = {
 def _selection(name: str):
     return ["NAME:Selections", "Selections:=", name, "NewPartsModelFlag:=", "Model"]
 
+def _set_nonmodel(hfss, name):
+    """把物件設為非模型（相容新舊 pyaedt 屬性名）。"""
+    try:
+        obj = hfss.modeler[name]
+        if hasattr(obj, "is_model"):
+            obj.is_model = False  # pyaedt >= 1.x
+        else:
+            obj.model = False     # 舊版 pyaedt
+    except Exception:
+        pass
+
 @app.post("/api/generate")
 def generate_aedt(config: ArrayConfig):
-    # 使用 PyAEDT 直接連線至目前開啟的 HFSS 專案，
-    # 以「複製 → 依 Lx 縮放 → 移動到定位」的方式產生完整陣列。
+    # 仿原版 MetaSurfaceToolkit 流程：開啟使用者上傳的 UnitCell 專案副本，
+    # 自動分類物件後建立完整陣列，全程不需要手動輸入物件名稱。
+    # 分類規則：
+    #   - 材質為真空／空氣（輻射盒等）→ 設為非模型，不參與陣列
+    #   - XY 尺寸接近 unit cell 尺寸（>= 95%）→ 背景層（基板／接地），放大 N 倍成整板
+    #   - 其餘 → 單元圖樣，逐格「複製 → 依 Lx 縮放 → 移動」
     # 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
 
     try:
@@ -227,50 +230,86 @@ def generate_aedt(config: ArrayConfig):
     except ImportError:
         raise HTTPException(status_code=500, detail="PyAEDT 尚未安裝或環境未正確載入")
 
-    # 取得要複製的陣列清單（含每個單元的相位與對應 Lx 尺寸）
+    project_path = _get_current_project()
+    if not project_path:
+        return {"status": "error", "message": "請先按「選擇 UnitCell 專案檔」上傳 .aedt 或 .aedtz！"}
+
+    # 取得要建立的陣列清單（含每個單元的相位與對應 Lx 尺寸）
     res = generate_preview(config)
     elements = res["elements"]
+    N = config.num_elements
 
     try:
-        # 連線至目前的 HFSS 專案 (new_desktop=False)
-        hfss = Hfss(new_desktop=False)
-
-        # 尋找基準物件（名稱可由前端設定，支援逗號分隔的多物件清單，預設 "UnitCell"）
-        base_names = [n.strip() for n in (config.unitcell_name or "UnitCell").split(",") if n.strip()]
-        missing = [n for n in base_names if n not in hfss.modeler.object_names]
-        if missing:
-            return {"status": "error", "message": f"在 HFSS 中找不到物件：{', '.join(missing)}！目前物件：{', '.join(hfss.modeler.object_names[:20])}"}
+        # 開啟上傳的專案副本（若使用者已開著 AEDT 就直接在同一視窗開啟，否則自動啟動）
+        hfss = Hfss(project=project_path, non_graphical=False, new_desktop=False)
 
         oeditor = hfss.modeler.oeditor
         model_units = hfss.modeler.model_units or "mm"
         unit_to_mm = _UNIT_TO_MM.get(model_units.lower(), 1.0)
+        pitch_mu = config.unit_cell_size / unit_to_mm  # unit cell 尺寸換算成模型單位
 
-        # 讀取所有基準物件的聯合邊界盒，取得原始 Lx 寬度與中心點（模型單位）
-        bbs = [hfss.modeler[n].bounding_box for n in base_names]  # [xmin, ymin, zmin, xmax, ymax, zmax]
+        # ── 自動分類 ──
+        pattern_names, background_names, excluded_names = [], [], []
+        for name in hfss.modeler.object_names:
+            try:
+                mat = (hfss.modeler[name].material_name or "").lower()
+            except Exception:
+                mat = ""
+            if mat in ("vacuum", "air"):
+                excluded_names.append(name)
+                continue
+            bb = hfss.modeler[name].bounding_box
+            dx, dy = bb[3] - bb[0], bb[4] - bb[1]
+            if dx >= 0.95 * pitch_mu and dy >= 0.95 * pitch_mu:
+                background_names.append(name)
+            else:
+                pattern_names.append(name)
+
+        if not pattern_names:
+            return {"status": "error",
+                    "message": (f"找不到比 unit cell（{config.unit_cell_size}mm）小的圖樣物件可以縮放！"
+                                f"請確認 Unit Cell Size 設定與專案尺寸一致。"
+                                f"目前物件：{', '.join(hfss.modeler.object_names[:20])}")}
+
+        # ── 背景層：以原點為中心放大 N 倍，成為整片大板 ──
+        for name in background_names:
+            bb = hfss.modeler[name].bounding_box
+            cx, cy = (bb[0] + bb[3]) / 2.0, (bb[1] + bb[4]) / 2.0
+            oeditor.Scale(
+                _selection(name),
+                ["NAME:ScaleParameters",
+                 "ScaleX:=", str(N), "ScaleY:=", str(N), "ScaleZ:=", "1"])
+            # 縮放以全域原點為基準，中心會跑到 N*c，平移使其置中於原點
+            if abs(cx) > 1e-9 or abs(cy) > 1e-9:
+                oeditor.Move(
+                    _selection(name),
+                    ["NAME:TranslateParameters",
+                     "TranslateVectorX:=", f"{-N * cx}{model_units}",
+                     "TranslateVectorY:=", f"{-N * cy}{model_units}",
+                     "TranslateVectorZ:=", "0mm"])
+
+        # ── 單元圖樣：逐格複製、縮放、定位 ──
+        bbs = [hfss.modeler[n].bounding_box for n in pattern_names]
         xmin = min(b[0] for b in bbs); ymin = min(b[1] for b in bbs)
         xmax = max(b[3] for b in bbs); ymax = max(b[4] for b in bbs)
         base_lx_mm = (xmax - xmin) * unit_to_mm
         base_cx = (xmin + xmax) / 2.0
         base_cy = (ymin + ymax) / 2.0
-
         if base_lx_mm <= 0:
-            return {"status": "error", "message": f"{base_names} 的 X 方向寬度為 0，無法進行縮放。"}
+            return {"status": "error", "message": f"圖樣物件 {pattern_names} 的 X 方向寬度為 0，無法縮放。"}
 
-        sel_str = ",".join(base_names)
+        sel_str = ",".join(pattern_names)
         created = 0
         for el in elements:
-            x_mm = el["x"]
-            y_mm = el["y"]
             scale_x = el["size_x"] / base_lx_mm  # 依 CSV 內插出的 Lx 對原始寬度的比例
 
-            # 1. 複製基準物件群（貼上後與原件重疊於原位）
             oeditor.Copy(["NAME:Selections", "Selections:=", sel_str])
             pasted = oeditor.Paste()
             if not pasted:
                 continue
             new_sel = ",".join(pasted) if isinstance(pasted, (list, tuple)) else str(pasted)
 
-            # 2. 先把複製體中心移回原點（Scale 是以全域原點為基準）
+            # 先把複製體中心移回原點（Scale 是以全域原點為基準）
             if abs(base_cx) > 1e-9 or abs(base_cy) > 1e-9:
                 oeditor.Move(
                     _selection(new_sel),
@@ -279,37 +318,39 @@ def generate_aedt(config: ArrayConfig):
                      "TranslateVectorY:=", f"{-base_cy}{model_units}",
                      "TranslateVectorZ:=", "0mm"])
 
-            # 3. 依 Lx 等比縮放 X 與 Y（原始設計 Ly = Lx；Z 維持不變，保留各層高度）
+            # 依 Lx 等比縮放 X 與 Y（Z 維持不變，保留各層高度）
             oeditor.Scale(
                 _selection(new_sel),
                 ["NAME:ScaleParameters",
-                 "ScaleX:=", str(scale_x),
-                 "ScaleY:=", str(scale_x),
-                 "ScaleZ:=", "1"])
+                 "ScaleX:=", str(scale_x), "ScaleY:=", str(scale_x), "ScaleZ:=", "1"])
 
-            # 4. 移動到陣列中的實際位置
             oeditor.Move(
                 _selection(new_sel),
                 ["NAME:TranslateParameters",
-                 "TranslateVectorX:=", f"{x_mm}mm",
-                 "TranslateVectorY:=", f"{y_mm}mm",
+                 "TranslateVectorX:=", f"{el['x']}mm",
+                 "TranslateVectorY:=", f"{el['y']}mm",
                  "TranslateVectorZ:=", "0mm"])
             created += 1
 
-        # 5. 把原始基準物件設為非模型物件（保留當範本，避免與陣列重疊參與模擬）
-        for n in base_names:
-            try:
-                obj = hfss.modeler[n]
-                if hasattr(obj, "is_model"):
-                    obj.is_model = False  # pyaedt >= 1.x
-                else:
-                    obj.model = False     # 舊版 pyaedt
-            except Exception:
-                pass
+        # ── 收尾：刪除原始圖樣（此為專案副本），真空物件設非模型，存檔 ──
+        try:
+            hfss.modeler.delete(pattern_names)
+        except Exception:
+            for n in pattern_names:
+                _set_nonmodel(hfss, n)
+        for n in excluded_names:
+            _set_nonmodel(hfss, n)
+        try:
+            hfss.save_project()
+        except Exception:
+            pass
 
         return {
             "status": "success",
-            "message": f"成功！已在 HFSS 中產生 {created} 個單元的陣列模型（原始 {sel_str} 已設為非模型物件）。",
+            "message": (f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
+                        f"圖樣：{', '.join(pattern_names)}｜"
+                        f"背景層（已放大 {N} 倍）：{', '.join(background_names) or '無'}｜"
+                        f"已忽略（真空／空氣）：{', '.join(excluded_names) or '無'}"),
         }
     except HTTPException:
         raise

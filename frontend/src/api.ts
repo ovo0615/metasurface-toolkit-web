@@ -10,7 +10,6 @@ export interface ArrayConfig {
   feed_z: number;
   beam_theta: number;
   beam_phi: number;
-  unitcell_name: string;  // HFSS 中作為陣列基準的物件名稱
 }
 
 export const fetchPreview = async (config: ArrayConfig) => {
@@ -62,17 +61,17 @@ export const releaseAedt = async () => {
   return res.json();
 };
 
-export const uploadModel = async (file: File) => {
+export const uploadProject = async (file: File) => {
   const formData = new FormData();
   formData.append("file", file);
-  
-  const res = await fetch("/api/upload_model", {
+
+  const res = await fetch("/api/upload_project", {
     method: "POST",
     body: formData,
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail || "Failed to upload model");
+    throw new Error(data.detail || "Failed to upload project");
   }
   return res.json();
 };

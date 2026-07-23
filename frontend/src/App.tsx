@@ -1,9 +1,8 @@
 // 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
 import React, { useState, useEffect, useRef } from 'react'
 import Preview2D from './components/Preview2D'
-import Preview3D from './components/Preview3D'
 import type { PreviewData } from './components/Preview2D'
-import { fetchPreview, generateModel, uploadFile, uploadModel, releaseAedt } from './api'
+import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt } from './api'
 import type { ArrayConfig } from './api'
 import './index.css'
 
@@ -19,20 +18,18 @@ export default function App() {
     feed_y: 0,
     feed_z: 16,
     beam_theta: 0,
-    beam_phi: 0,
-    unitcell_name: "UnitCell"
+    beam_phi: 0
   })
 
   const [previewData, setPreviewData] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState("")
   const [fileName, setFileName] = useState("尚未選擇")
-  const [modelName, setModelName] = useState("尚未選擇")
-  const [viewMode, setViewMode] = useState<"2D" | "3D">("2D")
-  // 使用者尚未提供任何資料（相位表或模型）前，不顯示預覽以免誤以為已匯入
+  const [projectName, setProjectName] = useState("尚未選擇")
+  // 使用者尚未上傳相位表前，不顯示預覽以免誤以為已匯入
   const [dataReady, setDataReady] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const modelInputRef = useRef<HTMLInputElement>(null)
+  const projectInputRef = useRef<HTMLInputElement>(null)
 
   const loadPreview = async (currentConfig: ArrayConfig) => {
     try {
@@ -157,25 +154,21 @@ export default function App() {
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
-  const handleModelChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleProjectChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    
+
     setLoading(true)
-    setMsg(`正在處理模型 ${file.name}...`)
+    setMsg(`正在上傳專案 ${file.name}...`)
     try {
-      const res = await uploadModel(file)
-      setModelName(file.name)
+      const res = await uploadProject(file)
+      setProjectName(file.name)
       setMsg(res.message)
-      setDataReady(true)
-      setViewMode("3D") // 自動切換到 3D
-      // 強制重新載入預覽或觸發 3D 元件更新
-      loadPreview(config)
     } catch (e: any) {
-      setMsg(e.message || "上傳模型失敗")
+      setMsg(e.message || "上傳專案失敗")
     }
     setLoading(false)
-    if (modelInputRef.current) modelInputRef.current.value = ""
+    if (projectInputRef.current) projectInputRef.current.value = ""
   }
 
   const inputStyle = { width: '100%', padding: '8px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '4px' }
@@ -190,51 +183,35 @@ export default function App() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '20px' }}>
           
           <div style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '6px' }}>
-            <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '5px' }}>真實 3D 模型 (UnitCell)：</div>
-            <div style={{ color: 'var(--accent)', marginBottom: '10px', wordBreak: 'break-all' }}>{modelName}</div>
-            <input 
-              type="file" 
-              accept=".obj, .stl, .aedtz"
-              ref={modelInputRef} 
-              style={{ display: 'none' }} 
-              onChange={handleModelChange} 
-            />
-            <button className="premium-btn" style={{ width: '100%', background: '#ff9800', marginBottom: '10px' }} onClick={() => modelInputRef.current?.click()} disabled={loading}>
-              📂 選擇 UnitCell 模型
-            </button>
-            <div style={{ display: 'flex', gap: '5px' }}>
-              <button 
-                onClick={() => setViewMode("2D")} 
-                style={{ flex: 1, padding: '5px', borderRadius: '4px', border: '1px solid #555', background: viewMode === '2D' ? '#555' : 'transparent', color: 'white', cursor: 'pointer' }}>
-                2D 預覽
-              </button>
-              <button 
-                onClick={() => setViewMode("3D")} 
-                style={{ flex: 1, padding: '5px', borderRadius: '4px', border: '1px solid #555', background: viewMode === '3D' ? '#555' : 'transparent', color: 'white', cursor: 'pointer' }}>
-                3D 預覽
-              </button>
-            </div>
-          </div>
-
-          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '6px' }}>
-            <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '5px' }}>目前資料來源：</div>
+            <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '5px' }}>① 相位資料表（phase–Lx）：</div>
             <div style={{ color: 'var(--accent)', marginBottom: '10px', wordBreak: 'break-all' }}>{fileName}</div>
-            <input 
-              type="file" 
-              accept=".csv, .xlsx" 
-              ref={fileInputRef} 
-              style={{ display: 'none' }} 
-              onChange={handleFileChange} 
+            <input
+              type="file"
+              accept=".csv, .xlsx"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
             />
             <button className="premium-btn" style={{ width: '100%', background: '#2ea043' }} onClick={() => fileInputRef.current?.click()} disabled={loading}>
               📁 選擇 Excel / CSV
             </button>
           </div>
 
-          <label>
-            HFSS 基準物件名稱
-            <input type="text" value={config.unitcell_name} onChange={e => setConfig({...config, unitcell_name: e.target.value})} style={inputStyle} />
-          </label>
+          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '6px' }}>
+            <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '5px' }}>② UnitCell 專案檔（不需先開啟）：</div>
+            <div style={{ color: 'var(--accent)', marginBottom: '10px', wordBreak: 'break-all' }}>{projectName}</div>
+            <input
+              type="file"
+              accept=".aedt, .aedtz"
+              ref={projectInputRef}
+              style={{ display: 'none' }}
+              onChange={handleProjectChange}
+            />
+            <button className="premium-btn" style={{ width: '100%', background: '#ff9800' }} onClick={() => projectInputRef.current?.click()} disabled={loading}>
+              📂 選擇 UnitCell 專案檔
+            </button>
+          </div>
+
           <label>
             Mode of Operation
             <select value={config.mode} onChange={e => setConfig({...config, mode: e.target.value})} style={inputStyle}>
@@ -313,16 +290,15 @@ export default function App() {
           }}>
             <div style={{ fontSize: '3em' }}>📐</div>
             <div style={{ fontSize: '1.2em', color: 'var(--text)' }}>尚未載入資料</div>
-            <div style={{ maxWidth: '420px', lineHeight: 1.8 }}>
-              請先於左側完成任一步驟：<br />
-              ①「選擇 Excel / CSV」上傳 phase–Lx 相位資料表（2D 預覽）<br />
-              ②「選擇 UnitCell 模型」上傳 .aedtz / .obj / .stl（3D 預覽）
+            <div style={{ maxWidth: '440px', lineHeight: 1.8 }}>
+              操作步驟：<br />
+              ①「選擇 Excel / CSV」上傳 phase–Lx 相位資料表，即可看到陣列佈局預覽<br />
+              ②「選擇 UnitCell 專案檔」上傳 .aedt / .aedtz（不需先在 AEDT 開啟）<br />
+              ③ 按「產生模型」自動在 AEDT 建立完整陣列
             </div>
           </div>
-        ) : viewMode === '2D' ? (
-          <Preview2D data={previewData} />
         ) : (
-          <Preview3D data={previewData} />
+          <Preview2D data={previewData} />
         )}
       </div>
     </div>

@@ -30,3 +30,7 @@ Thumbs.db
 # AEDT 自動存檔
 *.aedt.auto
 *.lock.json
+
+# AEDT 執行紀錄
+batch.log
+*.log
