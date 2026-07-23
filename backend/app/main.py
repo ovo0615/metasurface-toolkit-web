@@ -10,6 +10,7 @@ import os
 import shutil
 import threading
 import re
+import time
 
 app = FastAPI()
 
@@ -445,20 +446,31 @@ def _run_generate(config: ArrayConfig):
         tile_str = ",".join(tile_names)
         pasted_metal = []  # 所有複製出的金屬 sheet，最後統一重新指定 PerfE
         created = 0
+        skipped = 0  # 因 AEDT 暫時無回應而跳過的格數
         for idx, el in enumerate(elements):
             if cancelled():
                 return
             _gen.update(phase="建立單元中", current=idx + 1)
             scale_x = el["size_x"] / base_lx_mm
 
-            oeditor.Copy(["NAME:Selections", "Selections:=", sel_str])
-            pasted = oeditor.Paste()
+            # 複製＋貼上：AEDT 忙碌或被操作時單一指令可能失敗，重試 3 次
+            pasted = None
+            for _attempt in range(3):
+                try:
+                    oeditor.Copy(["NAME:Selections", "Selections:=", sel_str])
+                    pasted = oeditor.Paste()
+                    if pasted:
+                        break
+                except Exception:
+                    time.sleep(1.5)
             if not pasted:
+                skipped += 1
                 continue
             new_sel = ",".join(pasted) if isinstance(pasted, (list, tuple)) else str(pasted)
 
-            # 先把複製體中心移回原點（Scale 是以全域原點為基準）
-            if abs(base_cx) > 1e-9 or abs(base_cy) > 1e-9:
+            try:
+             # 先把複製體中心移回原點（Scale 是以全域原點為基準）
+             if abs(base_cx) > 1e-9 or abs(base_cy) > 1e-9:
                 oeditor.Move(
                     _selection(new_sel),
                     ["NAME:TranslateParameters",
@@ -466,28 +478,35 @@ def _run_generate(config: ArrayConfig):
                      "TranslateVectorY:=", f"{-base_cy}{model_units}",
                      "TranslateVectorZ:=", "0mm"])
 
-            # 依 Lx 等比縮放 X 與 Y（Z 維持不變，保留各層高度）
-            oeditor.Scale(
+             # 依 Lx 等比縮放 X 與 Y（Z 維持不變，保留各層高度）
+             oeditor.Scale(
                 _selection(new_sel),
                 ["NAME:ScaleParameters",
                  "ScaleX:=", str(scale_x), "ScaleY:=", str(scale_x), "ScaleZ:=", "1"])
 
-            oeditor.Move(
+             oeditor.Move(
                 _selection(new_sel),
                 ["NAME:TranslateParameters",
                  "TranslateVectorX:=", f"{el['x']}mm",
                  "TranslateVectorY:=", f"{el['y']}mm",
                  "TranslateVectorZ:=", "0mm"])
-            # 記錄金屬複製體（AEDT 的複製貼上不會帶邊界，最後要重新指定 PerfE）
-            plist = list(pasted) if isinstance(pasted, (list, tuple)) else [str(pasted)]
-            for src, newn in zip(pattern_names, plist):
+             # 記錄金屬複製體（AEDT 的複製貼上不會帶邊界，最後要重新指定 PerfE）
+             plist = list(pasted) if isinstance(pasted, (list, tuple)) else [str(pasted)]
+             for src, newn in zip(pattern_names, plist):
                 if src in metal_names:
                     pasted_metal.append(newn)
 
-            # 格柵層（cell 間格柵等）：逐格複製、不縮放、直接定位
-            if tile_names:
-                oeditor.Copy(["NAME:Selections", "Selections:=", tile_str])
-                pasted_t = oeditor.Paste()
+             # 格柵層（cell 間格柵等）：逐格複製、不縮放、直接定位（重試 3 次）
+             if tile_names:
+                pasted_t = None
+                for _attempt in range(3):
+                    try:
+                        oeditor.Copy(["NAME:Selections", "Selections:=", tile_str])
+                        pasted_t = oeditor.Paste()
+                        if pasted_t:
+                            break
+                    except Exception:
+                        time.sleep(1.5)
                 if pasted_t:
                     tsel = ",".join(pasted_t) if isinstance(pasted_t, (list, tuple)) else str(pasted_t)
                     oeditor.Move(
@@ -500,7 +519,10 @@ def _run_generate(config: ArrayConfig):
                     for src, newn in zip(tile_names, tlist):
                         if src in metal_names:
                             pasted_metal.append(newn)
-            created += 1
+             created += 1
+            except Exception:
+                skipped += 1
+                continue
 
         # ── 收尾：刪除原始圖樣／格柵與真空物件（此為專案副本）──
         _gen["phase"] = "收尾與存檔中"
@@ -559,7 +581,12 @@ def _run_generate(config: ArrayConfig):
         except Exception:
             pass
 
-        _gen["result"] = (f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
+        skip_note = ""
+        if skipped:
+            skip_note = (f"⚠ 有 {skipped} 格因 AEDT 暫時無回應被跳過（已自動重試仍失敗）。"
+                         f"建議建模期間不要操作 AEDT，或重新產生一次。")
+        _gen["result"] = (skip_note +
+                          f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
                           f"圖樣：{', '.join(pattern_names)}｜"
                           f"背景層（已放大 {N} 倍）：{', '.join(background_names) or '無'}｜"
                         f"格柵層（逐格鋪排）：{', '.join(tile_names) or '無'}｜"
