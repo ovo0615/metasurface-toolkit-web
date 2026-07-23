@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / 前端建置產物
+node_modules/
+frontend/dist/
+
+# AEDT 模擬結果與暫存（只保留 .aedt / .aedtz 專案原始檔）
+*.aedtresults/
+*.lock
+*.asol
+*.aedt.lock
+
+# 後端執行期上傳的靜態檔案
+backend/app/static/
+
+# 大型媒體檔（示範影片等）
+*.mp4
+
+# Office 暫存檔
+~$*
+
+# 作業系統
+Thumbs.db
+.DS_Store

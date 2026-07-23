@@ -1,6 +1,6 @@
 import React, { useRef, useMemo, useEffect, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
+import { OrbitControls, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader'
 
@@ -14,30 +14,40 @@ function InstancedElements({ data }: { data: any }) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [baseWidth, setBaseWidth] = useState(1)
+  const [loadError, setLoadError] = useState("")
 
   useEffect(() => {
-    // 載入伺服器上的 unitcell.obj
     const loader = new OBJLoader()
-    loader.load('http://127.0.0.1:8010/static/unitcell.obj', (obj) => {
+    const url = 'http://127.0.0.1:8010/static/unitcell.obj?t=' + Date.now()
+    loader.load(url, (obj) => {
       let geo: THREE.BufferGeometry | null = null
+      
+      // 合併所有 Mesh (如果有多個 part)
+      const geometries: THREE.BufferGeometry[] = []
       obj.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          geo = child.geometry
+          // 確保 clone 以免被原物件綁定
+          geometries.push(child.geometry.clone())
         }
       })
-      if (geo) {
-        // 計算 bounding box 找出原始模型的 X 寬度
-        geo.computeBoundingBox()
-        const box = geo.boundingBox
-        if (box) {
-          setBaseWidth(box.max.x - box.min.x)
-          // 將模型中心移至原點，方便進行縮放與旋轉
-          geo.center()
+      
+      import('three/examples/jsm/utils/BufferGeometryUtils').then(({ mergeGeometries }) => {
+        if (geometries.length > 0) {
+          geo = geometries.length === 1 ? geometries[0] : mergeGeometries(geometries)
+          geo.computeBoundingBox()
+          const box = geo.boundingBox
+          if (box) {
+            setBaseWidth(box.max.x - box.min.x)
+            geo.center()
+          }
+          setGeometry(geo)
+        } else {
+          setLoadError("模型中沒有找到可用的幾何網格 (Mesh)。")
         }
-        setGeometry(geo)
-      }
+      })
     }, undefined, (err) => {
       console.error("Failed to load unitcell.obj", err)
+      setLoadError("讀取 3D 模型失敗。")
     })
   }, [])
 
@@ -49,12 +59,11 @@ function InstancedElements({ data }: { data: any }) {
     if (meshRef.current && geometry && elements.length > 0) {
       const dummy = new THREE.Object3D()
       elements.forEach((el: any, i: number) => {
-        // el 含有 x, y, size_x, phase 等
-        // 算出縮放比例
-        const scaleX = baseWidth > 0 ? (el.size_x / baseWidth) : 1
+        // 算出均勻縮放比例 (為避免厚度或 Y 軸變成肉眼看不見的絲線，採用等比例縮放)
+        const scale = baseWidth > 0 ? (el.size_x / baseWidth) : 1
         
         dummy.position.set(el.x, el.y, 0)
-        dummy.scale.set(scaleX, 1, 1)
+        dummy.scale.set(scale, scale, scale)
         dummy.updateMatrix()
         meshRef.current!.setMatrixAt(i, dummy.matrix)
       })
@@ -62,6 +71,7 @@ function InstancedElements({ data }: { data: any }) {
     }
   }, [geometry, elements, baseWidth])
 
+  if (loadError) return <Html center><div style={{color:'red'}}>{loadError}</div></Html>
   if (!geometry || elements.length === 0) return null
 
   return (
