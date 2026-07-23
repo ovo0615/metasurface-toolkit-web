@@ -330,9 +330,27 @@ def _run_generate(config: ArrayConfig):
         unit_to_mm = _UNIT_TO_MM.get(model_units.lower(), 1.0)
         pitch_mu = config.unit_cell_size / unit_to_mm
 
+        # ── 金屬物件清單（來自 Perfect E 邊界的物件 id）──
+        metal_ids = set()
+        for b in hfss.boundaries:
+            if b.type == "Perfect E":
+                for oid in (b.props.get("Objects", []) or []):
+                    metal_ids.add(oid)
+        metal_names = set()
+        for n in hfss.modeler.object_names:
+            try:
+                if hfss.modeler[n].id in metal_ids:
+                    metal_names.add(n)
+            except Exception:
+                pass
+
         # ── 自動分類 ──
+        # pattern：比 cell 小的圖樣（逐格複製＋依 Lx 縮放）
+        # tile：cell 大小但稀疏的金屬 sheet（如 cell 間格柵），逐格複製「不」縮放
+        # background：cell 大小的實心層（基板／接地），放大 N 倍
         _gen["phase"] = "分類物件中"
-        pattern_names, background_names, excluded_names = [], [], []
+        pattern_names, background_names, tile_names, excluded_names = [], [], [], []
+        sheet_set = set(hfss.modeler.sheet_names)
         zmin_mu, zmax_mu = None, None
         bg_max_mu = 0.0
         for name in hfss.modeler.object_names:
@@ -348,8 +366,20 @@ def _run_generate(config: ArrayConfig):
             zmax_mu = bb[5] if zmax_mu is None else max(zmax_mu, bb[5])
             dx, dy = bb[3] - bb[0], bb[4] - bb[1]
             if dx >= 0.95 * pitch_mu and dy >= 0.95 * pitch_mu:
-                background_names.append(name)
                 bg_max_mu = max(bg_max_mu, dx, dy)
+                # 稀疏度判別：sheet 面積遠小於邊界盒面積＝格柵類
+                is_sparse_sheet = False
+                if name in sheet_set:
+                    try:
+                        area = sum(f.area for f in hfss.modeler[name].faces)
+                        if area < 0.9 * dx * dy:
+                            is_sparse_sheet = True
+                    except Exception:
+                        pass
+                if is_sparse_sheet:
+                    tile_names.append(name)
+                else:
+                    background_names.append(name)
             else:
                 pattern_names.append(name)
 
@@ -412,6 +442,8 @@ def _run_generate(config: ArrayConfig):
             return
 
         sel_str = ",".join(pattern_names)
+        tile_str = ",".join(tile_names)
+        pasted_metal = []  # 所有複製出的金屬 sheet，最後統一重新指定 PerfE
         created = 0
         for idx, el in enumerate(elements):
             if cancelled():
@@ -446,15 +478,44 @@ def _run_generate(config: ArrayConfig):
                  "TranslateVectorX:=", f"{el['x']}mm",
                  "TranslateVectorY:=", f"{el['y']}mm",
                  "TranslateVectorZ:=", "0mm"])
+            # 記錄金屬複製體（AEDT 的複製貼上不會帶邊界，最後要重新指定 PerfE）
+            plist = list(pasted) if isinstance(pasted, (list, tuple)) else [str(pasted)]
+            for src, newn in zip(pattern_names, plist):
+                if src in metal_names:
+                    pasted_metal.append(newn)
+
+            # 格柵層（cell 間格柵等）：逐格複製、不縮放、直接定位
+            if tile_names:
+                oeditor.Copy(["NAME:Selections", "Selections:=", tile_str])
+                pasted_t = oeditor.Paste()
+                if pasted_t:
+                    tsel = ",".join(pasted_t) if isinstance(pasted_t, (list, tuple)) else str(pasted_t)
+                    oeditor.Move(
+                        _selection(tsel),
+                        ["NAME:TranslateParameters",
+                         "TranslateVectorX:=", f"{el['x']}mm",
+                         "TranslateVectorY:=", f"{el['y']}mm",
+                         "TranslateVectorZ:=", "0mm"])
+                    tlist = list(pasted_t) if isinstance(pasted_t, (list, tuple)) else [str(pasted_t)]
+                    for src, newn in zip(tile_names, tlist):
+                        if src in metal_names:
+                            pasted_metal.append(newn)
             created += 1
 
-        # ── 收尾：刪除原始圖樣與真空／空氣物件（此為專案副本）──
+        # ── 收尾：刪除原始圖樣／格柵與真空物件（此為專案副本）──
         _gen["phase"] = "收尾與存檔中"
         try:
-            hfss.modeler.delete(pattern_names)
+            hfss.modeler.delete(pattern_names + tile_names)
         except Exception:
-            for n in pattern_names:
+            for n in pattern_names + tile_names:
                 _set_nonmodel(hfss, n)
+
+        # 重新指定 PerfE 給所有金屬複製體（複製貼上不會帶邊界）
+        if pasted_metal:
+            try:
+                hfss.assign_perfecte_to_sheets(pasted_metal, name="PerfE_array")
+            except Exception:
+                pass
         if excluded_names:
             try:
                 hfss.modeler.delete(excluded_names)
@@ -501,6 +562,8 @@ def _run_generate(config: ArrayConfig):
         _gen["result"] = (f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
                           f"圖樣：{', '.join(pattern_names)}｜"
                           f"背景層（已放大 {N} 倍）：{', '.join(background_names) or '無'}｜"
+                        f"格柵層（逐格鋪排）：{', '.join(tile_names) or '無'}｜"
+                        f"金屬複製體已重新指定 PerfE：{len(pasted_metal)} 件｜"
                           f"已刪除（真空／空氣）：{', '.join(excluded_names) or '無'}｜"
                           f"{env_msg}")
     except Exception as e:
@@ -552,6 +615,220 @@ def generate_cancel():
         _gen["cancel"] = True
         return {"status": "success", "message": "取消要求已送出，將在目前操作結束後停止。"}
     return {"status": "success", "message": "目前沒有進行中的建模作業。"}
+
+# ── Unit cell 相位掃描（自動產生 phase–Lx 表）──
+class SweepConfig(BaseModel):
+    lx_min_um: float = 600.0
+    lx_max_um: float = 2800.0
+    points: int = 9
+
+_sweep = {"running": False, "cancel": False, "current": 0, "total": 0,
+          "phase": "", "result": None, "error": None, "csv_url": None}
+_sweep_lock = threading.Lock()
+
+def _run_sweep(cfg: SweepConfig):
+    """逐點縮放圖樣並求解 unit cell，取 S11 反射相位，輸出 phase–Lx CSV。
+    沿用原專案的週期邊界（Master/Slave＋Floquet Port）與 Setup。"""
+    from ansys.aedt.core import Hfss, Desktop
+    hfss = None
+    master_path = _get_current_project()
+    try:
+        n_pts = max(2, int(cfg.points))
+        _sweep.update(total=n_pts, current=0, phase="開啟專案中")
+
+        # 從母本複製掃描專用副本
+        if master_path.endswith("_master.aedt"):
+            work = master_path[: -len("_master.aedt")] + "_sweep.aedt"
+        else:
+            work = os.path.splitext(master_path)[0] + "_sweep.aedt"
+        proj_name = os.path.splitext(os.path.basename(work))[0]
+
+        desktop = Desktop(new_desktop=False, non_graphical=False)
+        if proj_name in desktop.project_list:
+            desktop.odesktop.CloseProject(proj_name)
+        lock = work + ".lock"
+        if os.path.exists(lock):
+            os.remove(lock)
+        shutil.copy(master_path, work)
+
+        hfss = Hfss(project=work, non_graphical=False, new_desktop=False)
+
+        def cancelled():
+            if _sweep["cancel"]:
+                _sweep["phase"] = "取消中"
+                try:
+                    hfss.odesktop.CloseProject(proj_name)
+                except Exception:
+                    pass
+                _sweep["result"] = "已取消掃描。"
+                return True
+            return False
+
+        model_units = hfss.modeler.model_units or "mm"
+        u = _UNIT_TO_MM.get(model_units.lower(), 1.0)
+
+        # 自動分類：cell 尺寸＝非真空物件最大 XY 尺寸；比 cell 小的即為圖樣
+        _sweep["phase"] = "分類物件中"
+        cell_mu = 0.0
+        infos = []
+        for name in hfss.modeler.object_names:
+            try:
+                mat = (hfss.modeler[name].material_name or "").lower()
+            except Exception:
+                mat = ""
+            if mat in ("vacuum", "air"):
+                continue
+            bb = hfss.modeler[name].bounding_box
+            infos.append((name, bb))
+            cell_mu = max(cell_mu, bb[3] - bb[0], bb[4] - bb[1])
+        pattern_names = [n for n, bb in infos
+                         if (bb[3] - bb[0]) < 0.95 * cell_mu and (bb[4] - bb[1]) < 0.95 * cell_mu]
+        if not pattern_names:
+            _sweep["error"] = "找不到可縮放的圖樣物件（比 unit cell 小的物件）。"
+            return
+
+        bbs = [bb for n, bb in infos if n in pattern_names]
+        xmin = min(b[0] for b in bbs); ymin = min(b[1] for b in bbs)
+        xmax = max(b[3] for b in bbs); ymax = max(b[4] for b in bbs)
+        base_lx_um = (xmax - xmin) * u * 1000.0
+        base_cx = (xmin + xmax) / 2.0
+        base_cy = (ymin + ymax) / 2.0
+        if base_lx_um <= 0:
+            _sweep["error"] = "圖樣 X 方向寬度為 0。"
+            return
+
+        sel_str = ",".join(pattern_names)
+        oeditor = hfss.modeler.oeditor
+
+        # 若圖樣未置中於原點，先移回原點（Scale 以全域原點為基準）
+        if abs(base_cx) > 1e-9 or abs(base_cy) > 1e-9:
+            oeditor.Move(
+                _selection(sel_str),
+                ["NAME:TranslateParameters",
+                 "TranslateVectorX:=", f"{-base_cx}{model_units}",
+                 "TranslateVectorY:=", f"{-base_cy}{model_units}",
+                 "TranslateVectorZ:=", "0mm"])
+
+        # 反射相位表達式：取第一個 S(x,x) 對角項（Floquet Port 自反射）
+        traces = []
+        try:
+            traces = hfss.get_traces_for_plot(category="S")
+        except Exception:
+            pass
+        expr = None
+        for t in traces:
+            m = re.match(r"S\((.+?),(.+?)\)", t)
+            if m and m.group(1) == m.group(2):
+                expr = t
+                break
+        if expr is None and traces:
+            expr = traces[0]
+        if expr is None:
+            _sweep["error"] = "專案沒有可用的 S 參數（找不到 Floquet Port／激勵）。請確認 unit cell 專案含有週期邊界與埠。"
+            return
+
+        setup_name = hfss.setups[0].name if hfss.setups else None
+        if not setup_name:
+            _sweep["error"] = "專案沒有 Analysis Setup。"
+            return
+
+        # 逐點掃描：縮放到目標 Lx → 求解 → 取相位
+        rows = []
+        current_lx = base_lx_um
+        for i in range(n_pts):
+            if cancelled():
+                return
+            target_lx = cfg.lx_min_um + (cfg.lx_max_um - cfg.lx_min_um) * i / (n_pts - 1)
+            _sweep.update(phase=f"求解中（Lx={target_lx:.0f}um）", current=i + 1)
+
+            factor = target_lx / current_lx
+            oeditor.Scale(
+                _selection(sel_str),
+                ["NAME:ScaleParameters",
+                 "ScaleX:=", str(factor), "ScaleY:=", str(factor), "ScaleZ:=", "1"])
+            current_lx = target_lx
+
+            ok = hfss.analyze_setup(setup_name)
+            if not ok:
+                _sweep["error"] = f"Lx={target_lx:.0f}um 的求解失敗，請檢查 AEDT 訊息視窗。"
+                return
+            sol = hfss.post.get_solution_data(
+                expressions=expr,
+                setup_sweep_name=f"{setup_name} : LastAdaptive")
+            if not sol:
+                _sweep["error"] = f"無法讀取 {expr} 的解（Lx={target_lx:.0f}um）。"
+                return
+            try:
+                # pyaedt >= 1.x：formula="phase" 回傳弳度（phaserad 會重複轉換，勿用），自行轉成度
+                _, vals = sol.get_expression_data(expression=expr, formula="phase")
+                ph = math.degrees(float(vals[0]))
+            except AttributeError:
+                # 舊版 pyaedt
+                re_v = sol.data_real()[0]
+                im_v = sol.data_imag()[0]
+                ph = math.degrees(math.atan2(im_v, re_v))
+            ph = ((ph + 180.0) % 360.0) - 180.0  # 正規化到 -180 ~ 180
+            rows.append((ph, target_lx))
+
+        # 輸出 CSV 並載入為目前相位表
+        _sweep["phase"] = "輸出 CSV 中"
+        stem = proj_name.replace("_sweep", "")
+        csv_name = f"{stem}_phase_sweep.csv"
+        csv_path = os.path.join(static_dir, csv_name)
+        df = pd.DataFrame(rows, columns=["phase", "Lx [um]"])
+        df.to_csv(csv_path, index=False)
+        load_data(df.copy())
+
+        try:
+            hfss.save_project()
+        except Exception:
+            pass
+
+        _sweep["csv_url"] = f"/static/{csv_name}"
+        ph_min = min(r[0] for r in rows)
+        ph_max = max(r[0] for r in rows)
+        coverage_hint = ""
+        if (ph_max - ph_min) < 90.0:
+            cell_hint = cell_mu * u  # cell 尺寸（mm）
+            coverage_hint = (f"⚠ 相位涵蓋僅 {ph_max - ph_min:.1f}°，不足以做相位補償（理想需接近 360°）。"
+                             f"表示此 Lx 範圍離共振區太遠，建議把 Lx 範圍往大尺寸調整"
+                             f"（最大可到 cell 的 90% ≈ {cell_hint * 0.9 * 1000:.0f} um）並增加點數後重掃。")
+        _sweep["result"] = (f"掃描完成！共 {len(rows)} 點（Lx {cfg.lx_min_um:.0f}–{cfg.lx_max_um:.0f} um，"
+                            f"相位範圍 {ph_min:.1f}° ~ {ph_max:.1f}°）。"
+                            f"已自動載入為目前相位表，CSV 可從 {csv_name} 下載。{coverage_hint}")
+    except Exception as e:
+        _sweep["error"] = f"相位掃描發生錯誤: {str(e)}"
+    finally:
+        _sweep.update(running=False, phase="完成")
+
+@app.post("/api/sweep")
+def start_sweep(cfg: SweepConfig):
+    try:
+        from ansys.aedt.core import Hfss  # noqa: F401
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PyAEDT 尚未安裝或環境未正確載入")
+    if not _get_current_project():
+        return {"status": "error", "message": "請先按「選擇 UnitCell 專案檔」上傳 .aedt 或 .aedtz！"}
+    if cfg.lx_max_um <= cfg.lx_min_um:
+        return {"status": "error", "message": "Lx 最大值必須大於最小值。"}
+    with _sweep_lock:
+        if _sweep["running"] or _gen["running"]:
+            return {"status": "error", "message": "已有作業進行中，請等它完成或先取消。"}
+        _sweep.update(running=True, cancel=False, current=0, total=0,
+                      phase="準備中", result=None, error=None, csv_url=None)
+    threading.Thread(target=_run_sweep, args=(cfg,), daemon=True).start()
+    return {"status": "started", "message": "相位掃描已開始（每點需完整求解一次，請耐心等候）。"}
+
+@app.get("/api/sweep/status")
+def sweep_status():
+    return {k: _sweep[k] for k in ("running", "current", "total", "phase", "result", "error", "csv_url")}
+
+@app.post("/api/sweep/cancel")
+def sweep_cancel():
+    if _sweep["running"]:
+        _sweep["cancel"] = True
+        return {"status": "success", "message": "取消要求已送出。"}
+    return {"status": "success", "message": "目前沒有進行中的掃描。"}
 
 @app.post("/api/release")
 def release_aedt():

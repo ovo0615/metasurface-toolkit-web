@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import Preview2D from './components/Preview2D'
 import type { PreviewData } from './components/Preview2D'
-import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt, getGenerateStatus, cancelGenerate } from './api'
-import type { ArrayConfig, GenerateStatus } from './api'
+import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt, getGenerateStatus, cancelGenerate, startSweep, getSweepStatus, cancelSweep } from './api'
+import type { ArrayConfig, GenerateStatus, SweepStatus } from './api'
 import './index.css'
 
 export default function App() {
@@ -31,11 +31,52 @@ export default function App() {
   // 建模作業進度（null 表示沒有進行中的作業）
   const [genStatus, setGenStatus] = useState<GenerateStatus | null>(null)
   const pollRef = useRef<number | null>(null)
+  // 相位掃描設定與進度
+  const [sweepCfg, setSweepCfg] = useState({ lx_min_um: 600, lx_max_um: 2800, points: 9 })
+  const [sweepStatus, setSweepStatus] = useState<SweepStatus | null>(null)
+  const sweepPollRef = useRef<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
 
   // 元件卸載時停止輪詢
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    if (sweepPollRef.current) clearInterval(sweepPollRef.current)
+  }, [])
+
+  const handleSweep = async () => {
+    setMsg("正在啟動相位掃描...")
+    try {
+      const res = await startSweep(sweepCfg.lx_min_um, sweepCfg.lx_max_um, sweepCfg.points)
+      if (res.status !== "started") {
+        setMsg(res.message)
+        return
+      }
+      setMsg(res.message)
+      setSweepStatus({ running: true, current: 0, total: 0, phase: "準備中", result: null, error: null, csv_url: null })
+      if (sweepPollRef.current) clearInterval(sweepPollRef.current)
+      sweepPollRef.current = window.setInterval(async () => {
+        try {
+          const s = await getSweepStatus()
+          setSweepStatus(s)
+          if (!s.running) {
+            if (sweepPollRef.current) clearInterval(sweepPollRef.current)
+            sweepPollRef.current = null
+            setSweepStatus(null)
+            setMsg(s.error ? `發生錯誤：${s.error}` : (s.result || "掃描完成。"))
+            if (!s.error && s.csv_url) {
+              // 掃描成功：後端已載入新相位表，更新來源顯示並重算預覽
+              setFileName(s.csv_url.split("/").pop() || "掃描結果")
+              setDataReady(true)
+              loadPreview(config)
+            }
+          }
+        } catch { /* 下一秒再試 */ }
+      }, 1000)
+    } catch (e: any) {
+      setMsg(e.message || "啟動掃描失敗")
+    }
+  }
 
   const loadPreview = async (currentConfig: ArrayConfig) => {
     try {
@@ -251,6 +292,46 @@ export default function App() {
             <button className="premium-btn" style={{ width: '100%', background: '#ff9800' }} onClick={() => projectInputRef.current?.click()} disabled={loading}>
               📂 選擇 UnitCell 專案檔
             </button>
+          </div>
+
+          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '6px' }}>
+            <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              ③ 由 UnitCell 自動產生相位表（逐點求解，較耗時）：
+            </div>
+            <div style={{ display: 'flex', gap: '5px', marginBottom: '8px' }}>
+              <label style={{ flex: 1, fontSize: '0.8em' }}>Lx 最小 [µm]
+                <input type="number" value={sweepCfg.lx_min_um} onChange={e => setSweepCfg({ ...sweepCfg, lx_min_um: parseFloat(e.target.value) })} style={inputStyle} />
+              </label>
+              <label style={{ flex: 1, fontSize: '0.8em' }}>Lx 最大 [µm]
+                <input type="number" value={sweepCfg.lx_max_um} onChange={e => setSweepCfg({ ...sweepCfg, lx_max_um: parseFloat(e.target.value) })} style={inputStyle} />
+              </label>
+              <label style={{ flex: 1, fontSize: '0.8em' }}>點數
+                <input type="number" value={sweepCfg.points} onChange={e => setSweepCfg({ ...sweepCfg, points: parseInt(e.target.value) })} style={inputStyle} />
+              </label>
+            </div>
+            {sweepStatus ? (
+              <>
+                <div style={{ fontSize: '0.85em', color: 'var(--text)', marginBottom: '6px' }}>
+                  {sweepStatus.phase}
+                  {sweepStatus.total > 0 && `：${sweepStatus.current} / ${sweepStatus.total} 點`}
+                </div>
+                <div style={{ height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
+                  <div style={{
+                    height: '100%', borderRadius: '3px', background: '#42a5f5',
+                    width: sweepStatus.total > 0 ? `${(sweepStatus.current / sweepStatus.total * 100).toFixed(1)}%` : '5%',
+                    transition: 'width 0.5s'
+                  }} />
+                </div>
+                <button className="premium-btn" style={{ width: '100%', background: '#d32f2f' }}
+                        onClick={async () => { const r = await cancelSweep(); setMsg(r.message) }}>
+                  ⏹ 取消掃描
+                </button>
+              </>
+            ) : (
+              <button className="premium-btn" style={{ width: '100%', background: '#1976d2' }} onClick={handleSweep} disabled={loading || !!genStatus}>
+                🔄 掃描產生相位表
+              </button>
+            )}
           </div>
 
           <label>

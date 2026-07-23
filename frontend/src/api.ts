@@ -56,6 +56,38 @@ export const cancelGenerate = async () => {
   return res.json();
 };
 
+export interface SweepStatus {
+  running: boolean;
+  current: number;
+  total: number;
+  phase: string;
+  result: string | null;
+  error: string | null;
+  csv_url: string | null;
+}
+
+export const startSweep = async (lx_min_um: number, lx_max_um: number, points: number) => {
+  const res = await fetch("/api/sweep", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lx_min_um, lx_max_um, points }),
+  });
+  if (!res.ok) throw new Error("Failed to start sweep");
+  return res.json();
+};
+
+export const getSweepStatus = async (): Promise<SweepStatus> => {
+  const res = await fetch("/api/sweep/status");
+  if (!res.ok) throw new Error("Failed to fetch sweep status");
+  return res.json();
+};
+
+export const cancelSweep = async () => {
+  const res = await fetch("/api/sweep/cancel", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to cancel sweep");
+  return res.json();
+};
+
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
   formData.append("file", file);
