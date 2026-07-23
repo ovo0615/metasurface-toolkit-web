@@ -26,9 +26,11 @@ export default function App() {
   const [previewData, setPreviewData] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState("")
-  const [fileName, setFileName] = useState("預設 (Phase_dim_PG_45.csv)")
-  const [modelName, setModelName] = useState("無 (使用內建 2D)")
+  const [fileName, setFileName] = useState("尚未選擇")
+  const [modelName, setModelName] = useState("尚未選擇")
   const [viewMode, setViewMode] = useState<"2D" | "3D">("2D")
+  // 使用者尚未提供任何資料（相位表或模型）前，不顯示預覽以免誤以為已匯入
+  const [dataReady, setDataReady] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const modelInputRef = useRef<HTMLInputElement>(null)
 
@@ -145,6 +147,7 @@ export default function App() {
       const res = await uploadFile(file)
       setFileName(file.name)
       setMsg(res.message)
+      setDataReady(true)
       // 重新載入預覽
       loadPreview(config)
     } catch (e: any) {
@@ -164,6 +167,7 @@ export default function App() {
       const res = await uploadModel(file)
       setModelName(file.name)
       setMsg(res.message)
+      setDataReady(true)
       setViewMode("3D") // 自動切換到 3D
       // 強制重新載入預覽或觸發 3D 元件更新
       loadPreview(config)
@@ -299,9 +303,23 @@ export default function App() {
         </div>
       </div>
 
-      {/* 中央預覽 */}
+      {/* 中央預覽：尚未提供資料前顯示引導畫面 */}
       <div style={{ flex: 1, position: 'relative' }}>
-        {viewMode === '2D' ? (
+        {!dataReady ? (
+          <div style={{
+            width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: '12px',
+            background: '#0e121a', color: 'var(--text-muted)', textAlign: 'center', padding: '20px'
+          }}>
+            <div style={{ fontSize: '3em' }}>📐</div>
+            <div style={{ fontSize: '1.2em', color: 'var(--text)' }}>尚未載入資料</div>
+            <div style={{ maxWidth: '420px', lineHeight: 1.8 }}>
+              請先於左側完成任一步驟：<br />
+              ①「選擇 Excel / CSV」上傳 phase–Lx 相位資料表（2D 預覽）<br />
+              ②「選擇 UnitCell 模型」上傳 .aedtz / .obj / .stl（3D 預覽）
+            </div>
+          </div>
+        ) : viewMode === '2D' ? (
           <Preview2D data={previewData} />
         ) : (
           <Preview3D data={previewData} />
