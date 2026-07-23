@@ -527,8 +527,20 @@ def generate_aedt(config: ArrayConfig):
         _gen.update(running=True, cancel=False, current=0, total=0,
                     phase="準備中", result=None, error=None)
 
+    # 相位表與 cell 尺寸的合理性提示：最大 Lx 遠小於 cell 時，
+    # 幾乎可以肯定用錯了資料表（例如把 140GHz 的表套在 10GHz 專案上）
+    warning = None
+    try:
+        max_lx_mm = float(np.max(lx_data)) / 1000.0
+        if max_lx_mm < 0.05 * config.unit_cell_size:
+            warning = (f"⚠ 注意：目前相位表的最大 Lx 僅 {max_lx_mm:.3g} mm，"
+                       f"不到 cell（{config.unit_cell_size:g} mm）的 5%，patch 會非常小。"
+                       f"請確認相位表是否對應此 unit cell 設計（內建 Phase_dim_PG_45 為 140GHz／1mm 設計用）。")
+    except Exception:
+        pass
+
     threading.Thread(target=_run_generate, args=(config,), daemon=True).start()
-    return {"status": "started", "message": "建模作業已開始。"}
+    return {"status": "started", "message": "建模作業已開始。", "warning": warning}
 
 @app.get("/api/generate/status")
 def generate_status():

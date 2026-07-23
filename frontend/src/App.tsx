@@ -136,6 +136,8 @@ export default function App() {
         setMsg(res.message)
         return
       }
+      // 後端對「相位表與 cell 尺寸不成比例」等情況的警告，在建模期間持續顯示
+      setMsg(res.warning || "")
       setGenStatus({ running: true, current: 0, total: 0, phase: "準備中", result: null, error: null })
       // 每秒輪詢進度，結束後顯示結果
       if (pollRef.current) clearInterval(pollRef.current)
