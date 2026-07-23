@@ -332,14 +332,19 @@ def generate_aedt(config: ArrayConfig):
                  "TranslateVectorZ:=", "0mm"])
             created += 1
 
-        # ── 收尾：刪除原始圖樣（此為專案副本），真空物件設非模型，存檔 ──
+        # ── 收尾：刪除原始圖樣與真空／空氣物件（此為專案副本；
+        #    輻射盒尺寸只適用單一 unit cell，陣列模擬需重新建立邊界），存檔 ──
         try:
             hfss.modeler.delete(pattern_names)
         except Exception:
             for n in pattern_names:
                 _set_nonmodel(hfss, n)
-        for n in excluded_names:
-            _set_nonmodel(hfss, n)
+        if excluded_names:
+            try:
+                hfss.modeler.delete(excluded_names)
+            except Exception:
+                for n in excluded_names:
+                    _set_nonmodel(hfss, n)
         try:
             hfss.save_project()
         except Exception:
@@ -350,7 +355,7 @@ def generate_aedt(config: ArrayConfig):
             "message": (f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
                         f"圖樣：{', '.join(pattern_names)}｜"
                         f"背景層（已放大 {N} 倍）：{', '.join(background_names) or '無'}｜"
-                        f"已忽略（真空／空氣）：{', '.join(excluded_names) or '無'}"),
+                        f"已刪除（真空／空氣，陣列需重建邊界）：{', '.join(excluded_names) or '無'}"),
         }
     except HTTPException:
         raise
