@@ -35,6 +35,27 @@ export const generateModel = async (config: ArrayConfig) => {
   return res.json();
 };
 
+export interface GenerateStatus {
+  running: boolean;
+  current: number;
+  total: number;
+  phase: string;
+  result: string | null;
+  error: string | null;
+}
+
+export const getGenerateStatus = async (): Promise<GenerateStatus> => {
+  const res = await fetch("/api/generate/status");
+  if (!res.ok) throw new Error("Failed to fetch generate status");
+  return res.json();
+};
+
+export const cancelGenerate = async () => {
+  const res = await fetch("/api/generate/cancel", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to cancel");
+  return res.json();
+};
+
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
   formData.append("file", file);

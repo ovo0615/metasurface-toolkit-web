@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import os
 import shutil
+import threading
 
 app = FastAPI()
 
@@ -215,42 +216,48 @@ def _set_nonmodel(hfss, name):
     except Exception:
         pass
 
-@app.post("/api/generate")
-def generate_aedt(config: ArrayConfig):
-    # 仿原版 MetaSurfaceToolkit 流程：開啟使用者上傳的 UnitCell 專案副本，
-    # 自動分類物件後建立完整陣列，全程不需要手動輸入物件名稱。
-    # 分類規則：
-    #   - 材質為真空／空氣（輻射盒等）→ 設為非模型，不參與陣列
-    #   - XY 尺寸接近 unit cell 尺寸（>= 95%）→ 背景層（基板／接地），放大 N 倍成整板
-    #   - 其餘 → 單元圖樣，逐格「複製 → 依 Lx 縮放 → 移動」
-    # 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
+# ── 建模作業狀態（供進度查詢與取消）──
+_gen = {"running": False, "cancel": False, "current": 0, "total": 0,
+        "phase": "", "result": None, "error": None}
+_gen_lock = threading.Lock()
 
-    try:
-        from ansys.aedt.core import Hfss
-    except ImportError:
-        raise HTTPException(status_code=500, detail="PyAEDT 尚未安裝或環境未正確載入")
-
+def _run_generate(config: ArrayConfig):
+    """實際的建模流程，在背景執行緒中執行，隨時更新 _gen 進度並回應取消要求。"""
+    from ansys.aedt.core import Hfss
+    hfss = None
     project_path = _get_current_project()
-    if not project_path:
-        return {"status": "error", "message": "請先按「選擇 UnitCell 專案檔」上傳 .aedt 或 .aedtz！"}
-
-    # 取得要建立的陣列清單（含每個單元的相位與對應 Lx 尺寸）
-    res = generate_preview(config)
-    elements = res["elements"]
-    N = config.num_elements
-
     try:
-        # 開啟上傳的專案副本（若使用者已開著 AEDT 就直接在同一視窗開啟，否則自動啟動）
+        res = generate_preview(config)
+        elements = res["elements"]
+        N = config.num_elements
+        _gen.update(total=len(elements), current=0, phase="開啟專案中")
+
         hfss = Hfss(project=project_path, non_graphical=False, new_desktop=False)
+        project_name = os.path.splitext(os.path.basename(project_path))[0]
+
+        def cancelled():
+            if _gen["cancel"]:
+                _gen["phase"] = "取消中，關閉未存檔專案"
+                try:
+                    hfss.odesktop.CloseProject(project_name)
+                except Exception:
+                    pass
+                _gen["result"] = "已取消。半成品專案未存檔，磁碟上的副本仍是乾淨狀態，可直接重新產生。"
+                return True
+            return False
+
+        if cancelled():
+            return
 
         oeditor = hfss.modeler.oeditor
         model_units = hfss.modeler.model_units or "mm"
         unit_to_mm = _UNIT_TO_MM.get(model_units.lower(), 1.0)
-        pitch_mu = config.unit_cell_size / unit_to_mm  # unit cell 尺寸換算成模型單位
+        pitch_mu = config.unit_cell_size / unit_to_mm
 
         # ── 自動分類 ──
+        _gen["phase"] = "分類物件中"
         pattern_names, background_names, excluded_names = [], [], []
-        zmin_mu, zmax_mu = None, None  # 記錄結構 Z 範圍（模型單位），供之後建立空氣盒
+        zmin_mu, zmax_mu = None, None
         for name in hfss.modeler.object_names:
             try:
                 mat = (hfss.modeler[name].material_name or "").lower()
@@ -269,20 +276,22 @@ def generate_aedt(config: ArrayConfig):
                 pattern_names.append(name)
 
         if not pattern_names:
-            return {"status": "error",
-                    "message": (f"找不到比 unit cell（{config.unit_cell_size}mm）小的圖樣物件可以縮放！"
-                                f"請確認 Unit Cell Size 設定與專案尺寸一致。"
-                                f"目前物件：{', '.join(hfss.modeler.object_names[:20])}")}
+            _gen["error"] = (f"找不到比 unit cell（{config.unit_cell_size}mm）小的圖樣物件可以縮放！"
+                             f"請確認 Unit Cell Size 設定與專案尺寸一致。"
+                             f"目前物件：{', '.join(hfss.modeler.object_names[:20])}")
+            return
 
-        # ── 背景層：以原點為中心放大 N 倍，成為整片大板 ──
+        # ── 背景層：放大 N 倍成整板 ──
+        _gen["phase"] = "放大背景層中"
         for name in background_names:
+            if cancelled():
+                return
             bb = hfss.modeler[name].bounding_box
             cx, cy = (bb[0] + bb[3]) / 2.0, (bb[1] + bb[4]) / 2.0
             oeditor.Scale(
                 _selection(name),
                 ["NAME:ScaleParameters",
                  "ScaleX:=", str(N), "ScaleY:=", str(N), "ScaleZ:=", "1"])
-            # 縮放以全域原點為基準，中心會跑到 N*c，平移使其置中於原點
             if abs(cx) > 1e-9 or abs(cy) > 1e-9:
                 oeditor.Move(
                     _selection(name),
@@ -299,12 +308,16 @@ def generate_aedt(config: ArrayConfig):
         base_cx = (xmin + xmax) / 2.0
         base_cy = (ymin + ymax) / 2.0
         if base_lx_mm <= 0:
-            return {"status": "error", "message": f"圖樣物件 {pattern_names} 的 X 方向寬度為 0，無法縮放。"}
+            _gen["error"] = f"圖樣物件 {pattern_names} 的 X 方向寬度為 0，無法縮放。"
+            return
 
         sel_str = ",".join(pattern_names)
         created = 0
-        for el in elements:
-            scale_x = el["size_x"] / base_lx_mm  # 依 CSV 內插出的 Lx 對原始寬度的比例
+        for idx, el in enumerate(elements):
+            if cancelled():
+                return
+            _gen.update(phase="建立單元中", current=idx + 1)
+            scale_x = el["size_x"] / base_lx_mm
 
             oeditor.Copy(["NAME:Selections", "Selections:=", sel_str])
             pasted = oeditor.Paste()
@@ -335,8 +348,8 @@ def generate_aedt(config: ArrayConfig):
                  "TranslateVectorZ:=", "0mm"])
             created += 1
 
-        # ── 收尾：刪除原始圖樣與真空／空氣物件（此為專案副本；
-        #    輻射盒尺寸只適用單一 unit cell，陣列模擬需重新建立邊界），存檔 ──
+        # ── 收尾：刪除原始圖樣與真空／空氣物件（此為專案副本）──
+        _gen["phase"] = "收尾與存檔中"
         try:
             hfss.modeler.delete(pattern_names)
         except Exception:
@@ -349,14 +362,13 @@ def generate_aedt(config: ArrayConfig):
                 for n in excluded_names:
                     _set_nonmodel(hfss, n)
 
-        # ── 模擬環境：依陣列尺寸建立空氣盒（四周 λ/4 淨空）＋
-        #    Radiation 邊界＋垂直入射平面波激勵，讓陣列可直接 Validate／求解 ──
+        # ── 模擬環境：空氣盒（λ/4 淨空）＋Radiation＋垂直入射平面波 ──
         env_msg = ""
         try:
             wavelength_mm = 300.0 / config.frequency if config.frequency > 0 else 30.0
-            margin_mu = (wavelength_mm / 4.0) / unit_to_mm          # λ/4（模型單位）
-            half_ap_mu = (N * config.unit_cell_size / 2.0) / unit_to_mm  # 陣列半寬（模型單位）
-            x0, y0 = -half_ap_mu - margin_mu, -half_ap_mu - margin_mu
+            margin_mu = (wavelength_mm / 4.0) / unit_to_mm
+            half_ap_mu = (N * config.unit_cell_size / 2.0) / unit_to_mm
+            x0 = y0 = -half_ap_mu - margin_mu
             z0 = (zmin_mu if zmin_mu is not None else 0) - margin_mu
             z1 = (zmax_mu if zmax_mu is not None else 0) + margin_mu
             sx = sy = 2 * (half_ap_mu + margin_mu)
@@ -386,18 +398,48 @@ def generate_aedt(config: ArrayConfig):
         except Exception:
             pass
 
-        return {
-            "status": "success",
-            "message": (f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
-                        f"圖樣：{', '.join(pattern_names)}｜"
-                        f"背景層（已放大 {N} 倍）：{', '.join(background_names) or '無'}｜"
-                        f"已刪除（真空／空氣）：{', '.join(excluded_names) or '無'}｜"
-                        f"{env_msg}"),
-        }
-    except HTTPException:
-        raise
+        _gen["result"] = (f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
+                          f"圖樣：{', '.join(pattern_names)}｜"
+                          f"背景層（已放大 {N} 倍）：{', '.join(background_names) or '無'}｜"
+                          f"已刪除（真空／空氣）：{', '.join(excluded_names) or '無'}｜"
+                          f"{env_msg}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"與 HFSS 連線或建立模型時發生錯誤: {str(e)}")
+        _gen["error"] = f"與 HFSS 連線或建立模型時發生錯誤: {str(e)}"
+    finally:
+        _gen.update(running=False, phase="完成")
+
+@app.post("/api/generate")
+def generate_aedt(config: ArrayConfig):
+    # 啟動背景建模作業後立即回傳；進度由 /api/generate/status 查詢，
+    # /api/generate/cancel 可隨時取消。
+    # 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
+    try:
+        from ansys.aedt.core import Hfss  # noqa: F401
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PyAEDT 尚未安裝或環境未正確載入")
+
+    if not _get_current_project():
+        return {"status": "error", "message": "請先按「選擇 UnitCell 專案檔」上傳 .aedt 或 .aedtz！"}
+
+    with _gen_lock:
+        if _gen["running"]:
+            return {"status": "error", "message": "已有建模作業進行中，請等它完成或先取消。"}
+        _gen.update(running=True, cancel=False, current=0, total=0,
+                    phase="準備中", result=None, error=None)
+
+    threading.Thread(target=_run_generate, args=(config,), daemon=True).start()
+    return {"status": "started", "message": "建模作業已開始。"}
+
+@app.get("/api/generate/status")
+def generate_status():
+    return {k: _gen[k] for k in ("running", "current", "total", "phase", "result", "error")}
+
+@app.post("/api/generate/cancel")
+def generate_cancel():
+    if _gen["running"]:
+        _gen["cancel"] = True
+        return {"status": "success", "message": "取消要求已送出，將在目前操作結束後停止。"}
+    return {"status": "success", "message": "目前沒有進行中的建模作業。"}
 
 @app.post("/api/release")
 def release_aedt():

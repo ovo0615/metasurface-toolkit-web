@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import Preview2D from './components/Preview2D'
 import type { PreviewData } from './components/Preview2D'
-import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt } from './api'
-import type { ArrayConfig } from './api'
+import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt, getGenerateStatus, cancelGenerate } from './api'
+import type { ArrayConfig, GenerateStatus } from './api'
 import './index.css'
 
 export default function App() {
@@ -28,8 +28,14 @@ export default function App() {
   const [projectName, setProjectName] = useState("尚未選擇")
   // 使用者尚未上傳相位表前，不顯示預覽以免誤以為已匯入
   const [dataReady, setDataReady] = useState(false)
+  // 建模作業進度（null 表示沒有進行中的作業）
+  const [genStatus, setGenStatus] = useState<GenerateStatus | null>(null)
+  const pollRef = useRef<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
+
+  // 元件卸載時停止輪詢
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
   const loadPreview = async (currentConfig: ArrayConfig) => {
     try {
@@ -123,15 +129,40 @@ export default function App() {
   }, [config])
 
   const handleGenerate = async () => {
-    setLoading(true)
-    setMsg("正在呼叫 HFSS 建模，請稍候...")
+    setMsg("正在啟動建模作業...")
     try {
       const res = await generateModel(config)
-      setMsg(res.message)
+      if (res.status !== "started") {
+        setMsg(res.message)
+        return
+      }
+      setGenStatus({ running: true, current: 0, total: 0, phase: "準備中", result: null, error: null })
+      // 每秒輪詢進度，結束後顯示結果
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const s = await getGenerateStatus()
+          setGenStatus(s)
+          if (!s.running) {
+            if (pollRef.current) clearInterval(pollRef.current)
+            pollRef.current = null
+            setGenStatus(null)
+            setMsg(s.error ? `發生錯誤：${s.error}` : (s.result || "建模完成。"))
+          }
+        } catch { /* 後端暫時無回應時下一秒再試 */ }
+      }, 1000)
     } catch (e: any) {
       setMsg(e.message || "發生錯誤")
     }
-    setLoading(false)
+  }
+
+  const handleCancel = async () => {
+    try {
+      const res = await cancelGenerate()
+      setMsg(res.message)
+    } catch (e: any) {
+      setMsg(e.message || "取消失敗")
+    }
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -256,26 +287,52 @@ export default function App() {
           </div>
 
           <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-            <button className="premium-btn" onClick={handleGenerate} disabled={loading} style={{ flex: 1 }}>
-              {loading ? "處理中..." : "產生模型"}
-            </button>
-            <button 
-              className="premium-btn" 
-              onClick={async () => {
-                setLoading(true);
-                setMsg("正在釋放...");
-                try {
-                  const res = await releaseAedt();
-                  setMsg(res.message);
-                } catch(e: any) { setMsg(e.message); }
-                setLoading(false);
-              }} 
-              disabled={loading} 
-              style={{ flex: 1, background: '#d32f2f' }}
-            >
-              釋放 AEDT
-            </button>
+            {genStatus ? (
+              <button className="premium-btn" onClick={handleCancel} style={{ flex: 1, background: '#d32f2f' }}>
+                ⏹ 取消建模
+              </button>
+            ) : (
+              <>
+                <button className="premium-btn" onClick={handleGenerate} disabled={loading} style={{ flex: 1 }}>
+                  {loading ? "處理中..." : "產生模型"}
+                </button>
+                <button
+                  className="premium-btn"
+                  onClick={async () => {
+                    setLoading(true);
+                    setMsg("正在釋放...");
+                    try {
+                      const res = await releaseAedt();
+                      setMsg(res.message);
+                    } catch(e: any) { setMsg(e.message); }
+                    setLoading(false);
+                  }}
+                  disabled={loading}
+                  style={{ flex: 1, background: '#d32f2f' }}
+                >
+                  釋放 AEDT
+                </button>
+              </>
+            )}
           </div>
+
+          {/* 建模進度 */}
+          {genStatus && (
+            <div style={{ marginTop: '12px' }}>
+              <div style={{ fontSize: '0.9em', color: 'var(--text)', marginBottom: '6px' }}>
+                {genStatus.phase}
+                {genStatus.total > 0 && `：${genStatus.current} / ${genStatus.total} 格（${Math.round(genStatus.current / genStatus.total * 100)}%）`}
+              </div>
+              <div style={{ height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: '4px', background: 'var(--accent)',
+                  width: genStatus.total > 0 ? `${(genStatus.current / genStatus.total * 100).toFixed(1)}%` : '5%',
+                  transition: 'width 0.5s'
+                }} />
+              </div>
+            </div>
+          )}
+
           {msg && <div style={{ color: 'var(--accent)', fontSize: '0.9em', marginTop: '10px' }}>{msg}</div>}
         </div>
       </div>
