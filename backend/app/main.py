@@ -250,6 +250,7 @@ def generate_aedt(config: ArrayConfig):
 
         # ── 自動分類 ──
         pattern_names, background_names, excluded_names = [], [], []
+        zmin_mu, zmax_mu = None, None  # 記錄結構 Z 範圍（模型單位），供之後建立空氣盒
         for name in hfss.modeler.object_names:
             try:
                 mat = (hfss.modeler[name].material_name or "").lower()
@@ -259,6 +260,8 @@ def generate_aedt(config: ArrayConfig):
                 excluded_names.append(name)
                 continue
             bb = hfss.modeler[name].bounding_box
+            zmin_mu = bb[2] if zmin_mu is None else min(zmin_mu, bb[2])
+            zmax_mu = bb[5] if zmax_mu is None else max(zmax_mu, bb[5])
             dx, dy = bb[3] - bb[0], bb[4] - bb[1]
             if dx >= 0.95 * pitch_mu and dy >= 0.95 * pitch_mu:
                 background_names.append(name)
@@ -345,6 +348,39 @@ def generate_aedt(config: ArrayConfig):
             except Exception:
                 for n in excluded_names:
                     _set_nonmodel(hfss, n)
+
+        # ── 模擬環境：依陣列尺寸建立空氣盒（四周 λ/4 淨空）＋
+        #    Radiation 邊界＋垂直入射平面波激勵，讓陣列可直接 Validate／求解 ──
+        env_msg = ""
+        try:
+            wavelength_mm = 300.0 / config.frequency if config.frequency > 0 else 30.0
+            margin_mu = (wavelength_mm / 4.0) / unit_to_mm          # λ/4（模型單位）
+            half_ap_mu = (N * config.unit_cell_size / 2.0) / unit_to_mm  # 陣列半寬（模型單位）
+            x0, y0 = -half_ap_mu - margin_mu, -half_ap_mu - margin_mu
+            z0 = (zmin_mu if zmin_mu is not None else 0) - margin_mu
+            z1 = (zmax_mu if zmax_mu is not None else 0) + margin_mu
+            sx = sy = 2 * (half_ap_mu + margin_mu)
+            try:
+                box = hfss.modeler.create_box(
+                    origin=[x0, y0, z0], sizes=[sx, sy, z1 - z0],
+                    name="airbox_array", material="vacuum")
+            except TypeError:
+                box = hfss.modeler.create_box([x0, y0, z0], [sx, sy, z1 - z0],
+                                              name="airbox_array", matname="vacuum")
+            try:
+                box.transparency = 0.95
+            except Exception:
+                pass
+            hfss.assign_radiation_boundary_to_objects("airbox_array")
+            if not hfss.excitation_names:
+                hfss.plane_wave(
+                    vector_format="Cartesian", origin=[0, 0, 0],
+                    polarization=[1, 0, 0], propagation_vector=[0, 0, -1],
+                    name="IncPWave1")
+            env_msg = "已自動建立空氣盒＋Radiation 邊界＋平面波激勵，可直接 Validate／求解。"
+        except Exception as env_e:
+            env_msg = f"模擬環境自動建立失敗（{env_e}），請手動建立空氣盒與激勵。"
+
         try:
             hfss.save_project()
         except Exception:
@@ -355,7 +391,8 @@ def generate_aedt(config: ArrayConfig):
             "message": (f"成功！已建立 {N}x{N} 陣列（{created} 個單元）於專案 {os.path.basename(project_path)}。"
                         f"圖樣：{', '.join(pattern_names)}｜"
                         f"背景層（已放大 {N} 倍）：{', '.join(background_names) or '無'}｜"
-                        f"已刪除（真空／空氣，陣列需重建邊界）：{', '.join(excluded_names) or '無'}"),
+                        f"已刪除（真空／空氣）：{', '.join(excluded_names) or '無'}｜"
+                        f"{env_msg}"),
         }
     except HTTPException:
         raise
