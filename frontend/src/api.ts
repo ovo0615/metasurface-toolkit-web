@@ -10,6 +10,7 @@ export interface ArrayConfig {
   feed_z: number;
   beam_theta: number;
   beam_phi: number;
+  unitcell_name: string;  // HFSS 中作為陣列基準的物件名稱
 }
 
 export const fetchPreview = async (config: ArrayConfig) => {

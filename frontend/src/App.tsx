@@ -19,7 +19,8 @@ export default function App() {
     feed_y: 0,
     feed_z: 16,
     beam_theta: 0,
-    beam_phi: 0
+    beam_phi: 0,
+    unitcell_name: "UnitCell"
   })
 
   const [previewData, setPreviewData] = useState<PreviewData | null>(null)
@@ -189,7 +190,7 @@ export default function App() {
             <div style={{ color: 'var(--accent)', marginBottom: '10px', wordBreak: 'break-all' }}>{modelName}</div>
             <input 
               type="file" 
-              accept=".obj, .aedtz" 
+              accept=".obj, .stl, .aedtz"
               ref={modelInputRef} 
               style={{ display: 'none' }} 
               onChange={handleModelChange} 
@@ -226,6 +227,10 @@ export default function App() {
             </button>
           </div>
 
+          <label>
+            HFSS 基準物件名稱
+            <input type="text" value={config.unitcell_name} onChange={e => setConfig({...config, unitcell_name: e.target.value})} style={inputStyle} />
+          </label>
           <label>
             Mode of Operation
             <select value={config.mode} onChange={e => setConfig({...config, mode: e.target.value})} style={inputStyle}>

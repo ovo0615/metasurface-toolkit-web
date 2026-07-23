@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js'
+import { STLLoader } from 'three/addons/loaders/STLLoader.js'
 
 // 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供
 
@@ -16,9 +17,35 @@ function InstancedElements({ data }: { data: any }) {
   const [baseWidth, setBaseWidth] = useState(1)
   const [loadError, setLoadError] = useState("")
 
+  // 幾何載入完成後的共用處理：置中並記錄原始寬度
+  const onGeometryReady = (geo: THREE.BufferGeometry) => {
+    geo.computeBoundingBox()
+    const box = geo.boundingBox
+    if (box) {
+      setBaseWidth(box.max.x - box.min.x)
+      geo.center()
+    }
+    setGeometry(geo)
+  }
+
   useEffect(() => {
+    const t = '?t=' + Date.now()  // 經由 Vite proxy 轉發至後端
+    // 優先載入 STL（AEDT 匯出格式），不存在時退回 OBJ
+    fetch('/static/unitcell.stl' + t, { method: 'HEAD' }).then(r => {
+      if (r.ok) {
+        new STLLoader().load('/static/unitcell.stl' + t, onGeometryReady, undefined, (err: unknown) => {
+          console.error("Failed to load unitcell.stl", err)
+          setLoadError("讀取 3D 模型（STL）失敗。")
+        })
+      } else {
+        loadObj(t)
+      }
+    }).catch(() => loadObj(t))
+  }, [])
+
+  const loadObj = (t: string) => {
     const loader = new OBJLoader()
-    const url = '/static/unitcell.obj?t=' + Date.now()  // 經由 Vite proxy 轉發至後端
+    const url = '/static/unitcell.obj' + t
     loader.load(url, (obj: THREE.Group) => {
       // 合併所有 Mesh (如果有多個 part)
       const geometries: THREE.BufferGeometry[] = []
@@ -36,13 +63,7 @@ function InstancedElements({ data }: { data: any }) {
             setLoadError("合併模型幾何失敗。")
             return
           }
-          geo.computeBoundingBox()
-          const box = geo.boundingBox
-          if (box) {
-            setBaseWidth(box.max.x - box.min.x)
-            geo.center()
-          }
-          setGeometry(geo)
+          onGeometryReady(geo)
         } else {
           setLoadError("模型中沒有找到可用的幾何網格 (Mesh)。")
         }
@@ -51,7 +72,7 @@ function InstancedElements({ data }: { data: any }) {
       console.error("Failed to load unitcell.obj", err)
       setLoadError("讀取 3D 模型失敗。")
     })
-  }, [])
+  }
 
   const elements = useMemo(() => {
     return data?.rawElements || []
