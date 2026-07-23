@@ -3,20 +3,21 @@ import React, { useState, useEffect, useRef } from 'react'
 import Preview2D from './components/Preview2D'
 import Preview3D from './components/Preview3D'
 import type { PreviewData } from './components/Preview2D'
-import { fetchPreview, generateModel, uploadFile, uploadModel } from './api'
+import { fetchPreview, generateModel, uploadFile, uploadModel, releaseAedt } from './api'
 import type { ArrayConfig } from './api'
 import './index.css'
 
 export default function App() {
+  // 預設值對齊內建資料表 Phase_dim_PG_45.csv（140GHz 蝴蝶結單元、cell 1mm）
   const [config, setConfig] = useState<ArrayConfig>({
     mode: "Reflectarray",
     shape: "Square",
-    frequency: 10,
-    unit_cell_size: 8,
-    num_elements: 40,
+    frequency: 140,
+    unit_cell_size: 1,
+    num_elements: 20,
     feed_x: 0,
     feed_y: 0,
-    feed_z: 320,
+    feed_z: 16,
     beam_theta: 0,
     beam_phi: 0
   })
@@ -36,7 +37,7 @@ export default function App() {
       
       const bowties = data.elements.map((el: any) => {
         const W = el.size_x;
-        const H = el.size_y * 0.8; // 高度佔 cell 的 80%
+        const H = el.size_y; // 後端已回傳實際 Ly（原始設計 Ly = Lx）
         const cx = el.x;
         const cy = el.y;
         // 蝴蝶結的中央縮腰寬度，設為總寬度的 20%
@@ -277,10 +278,9 @@ export default function App() {
               onClick={async () => {
                 setLoading(true);
                 setMsg("正在釋放...");
-                try { 
-                  const { releaseAedt } = await import('./api');
-                  const res = await releaseAedt(); 
-                  setMsg(res.message); 
+                try {
+                  const res = await releaseAedt();
+                  setMsg(res.message);
                 } catch(e: any) { setMsg(e.message); }
                 setLoading(false);
               }} 
@@ -304,30 +304,4 @@ export default function App() {
       </div>
     </div>
   )
-}
-
-// 輔助函數
-const inputStyle = {
-  width: '100%', padding: '8px', marginTop: '5px', borderRadius: '4px', border: '1px solid var(--border-light)', background: 'rgba(0,0,0,0.2)', color: 'white'
-}
-
-function hslToRgb(h: number, s: number, l: number) {
-  let r, g, b;
-  if(s == 0){ r = g = b = l; }
-  else{
-      var hue2rgb = function hue2rgb(p: number, q: number, t: number){
-          if(t < 0) t += 1;
-          if(t > 1) t -= 1;
-          if(t < 1/6) return p + (q - p) * 6 * t;
-          if(t < 1/2) return q;
-          if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-          return p;
-      }
-      var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-      var p = 2 * l - q;
-      r = hue2rgb(p, q, h + 1/3);
-      g = hue2rgb(p, q, h);
-      b = hue2rgb(p, q, h - 1/3);
-  }
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
 }

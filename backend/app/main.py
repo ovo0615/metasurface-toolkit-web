@@ -86,7 +86,9 @@ async def upload_data(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"讀取失敗: {str(e)}")
 
 @app.post("/api/upload_model")
-async def upload_model(file: UploadFile = File(...)):
+def upload_model(file: UploadFile = File(...)):
+    # 注意：此端點為同步函式（def 而非 async def），
+    # FastAPI 會將其放入 threadpool 執行，避免 PyAEDT 的長時間作業卡住整個伺服器。
     try:
         if not (file.filename.endswith('.obj') or file.filename.endswith('.aedtz')):
             raise HTTPException(status_code=400, detail="不支援的格式，請上傳 .obj 或 .aedtz")
@@ -143,11 +145,11 @@ def generate_preview(config: ArrayConfig):
             steering = x * math.sin(theta_rad) * math.cos(phi_rad) + y * math.sin(theta_rad) * math.sin(phi_rad)
             
             # 3. 結合並求出陣列單元真正需要的補償相位
-            if config.mode == "Transmitarray":
-                phase_req = k0 * (di - steering)
-            else: # Reflectarray
-                phase_req = k0 * (di - steering)
-            
+            # 標準相位補償公式：phi = k0 * (di - sin(theta)*(x*cos(phi0)+y*sin(phi0)))
+            # Reflectarray 與 Transmitarray 的相位分佈公式相同，
+            # 差別在於饋源擺放位置（反射式在正面、穿透式在背面）與單元設計本身。
+            phase_req = k0 * (di - steering)
+
             phase = phase_req % 360
             
             # 透過數值內插法從 CSV 中取得真實尺寸 (Lx um)
@@ -159,8 +161,8 @@ def generate_preview(config: ArrayConfig):
                 "x": x,
                 "y": y,
                 "phase": phase,
-                "size_x": lx_mm, 
-                "size_y": pitch * 0.8
+                "size_x": lx_mm,
+                "size_y": lx_mm  # 原始 140GHz 蝴蝶結設計中 Ly = Lx，元件為等比縮放
             })
             
     return {
@@ -174,53 +176,103 @@ def generate_preview(config: ArrayConfig):
         }
     }
 
+# 模型單位換算為 mm 的係數
+_UNIT_TO_MM = {
+    "nm": 1e-6, "um": 1e-3, "mm": 1.0, "cm": 10.0,
+    "meter": 1000.0, "m": 1000.0, "mil": 0.0254, "in": 25.4, "inch": 25.4,
+}
+
+def _selection(name: str):
+    return ["NAME:Selections", "Selections:=", name, "NewPartsModelFlag:=", "Model"]
+
 @app.post("/api/generate")
 def generate_aedt(config: ArrayConfig):
-    # 使用 PyAEDT 直接連線至目前開啟的 HFSS 專案進行陣列複製
+    # 使用 PyAEDT 直接連線至目前開啟的 HFSS 專案，
+    # 以「複製 → 依 Lx 縮放 → 移動到定位」的方式產生完整陣列。
     # 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
-    
+
     try:
         from ansys.aedt.core import Hfss
     except ImportError:
         raise HTTPException(status_code=500, detail="PyAEDT 尚未安裝或環境未正確載入")
-        
-    # 取得要複製的陣列清單
+
+    # 取得要複製的陣列清單（含每個單元的相位與對應 Lx 尺寸）
     res = generate_preview(config)
     elements = res["elements"]
-    
+
     try:
         # 連線至目前的 HFSS 專案 (new_desktop=False)
         hfss = Hfss(new_desktop=False)
-        
+
         # 尋找基準的 UnitCell 物件，假設在模型中它名為 "UnitCell"
         if "UnitCell" not in hfss.modeler.object_names:
-            # 假設沒有 UnitCell，我們就不執行操作並回報錯誤
             return {"status": "error", "message": "在 HFSS 中找不到名為 'UnitCell' 的物件！請確認您的模型設定。"}
-        
-        for idx, el in enumerate(elements):
-            x = el["x"]
-            y = el["y"]
-            lx_um = el["size_x"] * 1000 # 真實 Lx 長度
-            
-            # 使用 duplicate_along_line 來複製
-            # vector = [X偏移, Y偏移, Z偏移]
-            new_objs = hfss.modeler.duplicate_along_line(
-                "UnitCell", 
-                [x, y, 0], 
-                clones=2, 
-                attachObject=False
-            )
-            
-            # 新產生的物件(list 中的第二個，第一個是原本的 UnitCell)
-            if new_objs and len(new_objs) >= 2:
-                new_obj_name = new_objs[1]
-                # 理論上若要改變 Lx，最完美的做法是利用 PyAEDT 的 local variables 或參數化模型
-                # 但因為這是單一物件操作，若物件能直接設定 X 尺寸：
-                # (這裡僅為架構示範，視實際模型參數而定)
-                # hfss.modeler[new_obj_name].x_size = f"{lx_um}um" 
-                pass
-                
-        return {"status": "success", "message": "成功！已直接在 HFSS 中產生天線陣列模型。"}
+
+        oeditor = hfss.modeler.oeditor
+        model_units = hfss.modeler.model_units or "mm"
+        unit_to_mm = _UNIT_TO_MM.get(model_units.lower(), 1.0)
+
+        # 讀取基準物件的邊界盒，取得原始 Lx 寬度與中心點（模型單位）
+        base = hfss.modeler["UnitCell"]
+        bb = base.bounding_box  # [xmin, ymin, zmin, xmax, ymax, zmax]
+        base_lx_mm = (bb[3] - bb[0]) * unit_to_mm
+        base_cx = (bb[0] + bb[3]) / 2.0
+        base_cy = (bb[1] + bb[4]) / 2.0
+
+        if base_lx_mm <= 0:
+            return {"status": "error", "message": "UnitCell 的 X 方向寬度為 0，無法進行縮放。"}
+
+        created = 0
+        for el in elements:
+            x_mm = el["x"]
+            y_mm = el["y"]
+            scale_x = el["size_x"] / base_lx_mm  # 依 CSV 內插出的 Lx 對原始寬度的比例
+
+            # 1. 複製基準 UnitCell（貼上後與原件重疊於原位）
+            oeditor.Copy(["NAME:Selections", "Selections:=", "UnitCell"])
+            pasted = oeditor.Paste()
+            if not pasted:
+                continue
+            new_name = pasted[0]
+
+            # 2. 先把複製體中心移回原點（Scale 是以全域原點為基準）
+            if abs(base_cx) > 1e-9 or abs(base_cy) > 1e-9:
+                oeditor.Move(
+                    _selection(new_name),
+                    ["NAME:TranslateParameters",
+                     "TranslateVectorX:=", f"{-base_cx}{model_units}",
+                     "TranslateVectorY:=", f"{-base_cy}{model_units}",
+                     "TranslateVectorZ:=", "0mm"])
+
+            # 3. 依 Lx 等比縮放 X 與 Y（原始設計 Ly = Lx；Z 為金屬厚度維持不變）
+            oeditor.Scale(
+                _selection(new_name),
+                ["NAME:ScaleParameters",
+                 "ScaleX:=", str(scale_x),
+                 "ScaleY:=", str(scale_x),
+                 "ScaleZ:=", "1"])
+
+            # 4. 移動到陣列中的實際位置
+            oeditor.Move(
+                _selection(new_name),
+                ["NAME:TranslateParameters",
+                 "TranslateVectorX:=", f"{x_mm}mm",
+                 "TranslateVectorY:=", f"{y_mm}mm",
+                 "TranslateVectorZ:=", "0mm"])
+            created += 1
+
+        # 5. 把原始 UnitCell 設為非模型物件（保留當範本，避免與陣列重疊參與模擬）
+        try:
+            base.model = False
+        except Exception:
+            pass
+
+        return {
+            "status": "success",
+            "message": f"成功！已在 HFSS 中產生 {created} 個單元的陣列模型（原始 UnitCell 已設為非模型物件）。",
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"與 HFSS 連線或建立模型時發生錯誤: {str(e)}")
 

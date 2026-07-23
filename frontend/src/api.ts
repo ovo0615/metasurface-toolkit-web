@@ -13,7 +13,7 @@ export interface ArrayConfig {
 }
 
 export const fetchPreview = async (config: ArrayConfig) => {
-  const res = await fetch("http://127.0.0.1:8010/api/preview", {
+  const res = await fetch("/api/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
@@ -23,7 +23,7 @@ export const fetchPreview = async (config: ArrayConfig) => {
 };
 
 export const generateModel = async (config: ArrayConfig) => {
-  const res = await fetch("http://127.0.0.1:8010/api/generate", {
+  const res = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
@@ -39,7 +39,7 @@ export const uploadFile = async (file: File) => {
   const formData = new FormData();
   formData.append("file", file);
   
-  const res = await fetch("http://127.0.0.1:8010/api/upload", {
+  const res = await fetch("/api/upload", {
     method: "POST",
     body: formData,
   });
@@ -51,7 +51,7 @@ export const uploadFile = async (file: File) => {
 };
 
 export const releaseAedt = async () => {
-  const res = await fetch("http://127.0.0.1:8010/api/release", {
+  const res = await fetch("/api/release", {
     method: "POST",
   });
   if (!res.ok) {
@@ -65,7 +65,7 @@ export const uploadModel = async (file: File) => {
   const formData = new FormData();
   formData.append("file", file);
   
-  const res = await fetch("http://127.0.0.1:8010/api/upload_model", {
+  const res = await fetch("/api/upload_model", {
     method: "POST",
     body: formData,
   });

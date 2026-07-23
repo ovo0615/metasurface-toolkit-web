@@ -7,6 +7,7 @@ export interface PreviewData {
   layer_colors?: Record<string, number[]>
   layer_order?: string[]
   bounds: { min: [number, number]; max: [number, number] }
+  rawElements?: any[]  // 後端回傳的原始元素清單（供 3D 預覽使用）
 }
 
 interface Preview2DProps {
