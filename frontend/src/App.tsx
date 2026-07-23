@@ -190,10 +190,18 @@ export default function App() {
     if (!file) return
 
     setLoading(true)
-    setMsg(`正在上傳專案 ${file.name}...`)
+    setMsg(`正在上傳專案 ${file.name} 並偵測參數（AEDT 未開啟時會自動啟動，請稍候）...`)
     try {
       const res = await uploadProject(file)
       setProjectName(file.name)
+      // 自動帶入偵測到的專案參數（unit cell 尺寸、Setup 頻率）
+      if (res.detected) {
+        setConfig(c => ({
+          ...c,
+          unit_cell_size: res.detected.unit_cell_size ?? c.unit_cell_size,
+          frequency: res.detected.frequency ?? c.frequency,
+        }))
+      }
       setMsg(res.message)
     } catch (e: any) {
       setMsg(e.message || "上傳專案失敗")

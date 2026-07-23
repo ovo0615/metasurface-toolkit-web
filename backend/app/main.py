@@ -9,6 +9,7 @@ import numpy as np
 import os
 import shutil
 import threading
+import re
 
 app = FastAPI()
 
@@ -96,6 +97,43 @@ async def upload_data(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"讀取失敗: {str(e)}")
 
+def _detect_project_params(master_path):
+    """開啟母本量測 unit cell 尺寸（非真空物件最大 XY 尺寸）與 Setup 頻率，完成後關閉專案。
+    若 AEDT 已在執行會直接沿用該視窗，只需數秒；否則會自動啟動 AEDT（較久）。"""
+    from ansys.aedt.core import Hfss
+    hfss = Hfss(project=master_path, non_graphical=False, new_desktop=False)
+    cell_mm, freq_ghz = None, None
+    try:
+        model_units = hfss.modeler.model_units or "mm"
+        u = _UNIT_TO_MM.get(model_units.lower(), 1.0)
+        cell = 0.0
+        for name in hfss.modeler.object_names:
+            try:
+                mat = (hfss.modeler[name].material_name or "").lower()
+            except Exception:
+                mat = ""
+            if mat in ("vacuum", "air"):
+                continue
+            bb = hfss.modeler[name].bounding_box
+            cell = max(cell, (bb[3] - bb[0]) * u, (bb[4] - bb[1]) * u)
+        if cell > 0:
+            cell_mm = round(cell, 4)
+        try:
+            fstr = str(hfss.setups[0].props.get("Frequency", "")).strip()
+            m = re.match(r"([\d.]+)\s*(THz|GHz|MHz|kHz|Hz)", fstr, re.I)
+            if m:
+                mult = {"thz": 1000.0, "ghz": 1.0, "mhz": 1e-3, "khz": 1e-6, "hz": 1e-9}[m.group(2).lower()]
+                freq_ghz = round(float(m.group(1)) * mult, 4)
+        except Exception:
+            pass
+    finally:
+        try:
+            project_name = os.path.splitext(os.path.basename(master_path))[0]
+            hfss.odesktop.CloseProject(project_name)
+        except Exception:
+            pass
+    return cell_mm, freq_ghz
+
 @app.post("/api/upload_project")
 def upload_project(file: UploadFile = File(...)):
     """上傳 UnitCell 專案檔（.aedt 或 .aedtz），存為母本 <名稱>_master.aedt。
@@ -132,7 +170,27 @@ def upload_project(file: UploadFile = File(...)):
         with open(_project_marker, "w", encoding="utf-8") as f:
             f.write(target)
 
-        return {"status": "success", "message": f"專案已上傳（母本：{os.path.basename(target)}）。設定好參數後即可按「產生模型」；重複建模會自動從母本重新開始。"}
+        # 自動偵測專案參數（unit cell 尺寸、Setup 頻率），供前端直接帶入欄位
+        detected = None
+        try:
+            cell_mm, freq_ghz = _detect_project_params(target)
+            if cell_mm or freq_ghz:
+                detected = {"unit_cell_size": cell_mm, "frequency": freq_ghz}
+        except Exception:
+            pass
+
+        if detected:
+            parts = []
+            if detected.get("unit_cell_size"):
+                parts.append(f"Unit Cell Size {detected['unit_cell_size']:g} mm")
+            if detected.get("frequency"):
+                parts.append(f"Frequency {detected['frequency']:g} GHz")
+            hint = f"已自動帶入專案參數：{'、'.join(parts)}。"
+        else:
+            hint = "（無法自動偵測專案參數，請手動確認 Unit Cell Size 與 Frequency。）"
+
+        return {"status": "success", "detected": detected,
+                "message": f"專案已上傳（母本：{os.path.basename(target)}）。{hint}設定好其餘參數後即可按「產生模型」。"}
     except HTTPException:
         raise
     except Exception as e:
