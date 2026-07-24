@@ -468,6 +468,14 @@ export default function App() {
                   transition: 'width 0.5s'
                 }} />
               </div>
+              <div style={{
+                marginTop: '10px', padding: '8px 10px', borderRadius: '4px',
+                background: 'rgba(211,47,47,0.15)', border: '1px solid rgba(211,47,47,0.5)',
+                fontSize: '0.82em', lineHeight: 1.6
+              }}>
+                ⚠ 建模期間請勿操作 AEDT<br />
+                按下 Validate、開啟對話框或執行復原，會使指令永久卡死而必須重來。
+              </div>
             </div>
           )}
 

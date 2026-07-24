@@ -525,19 +525,15 @@ def _run_generate(config: ArrayConfig):
                 continue
 
         # ── 收尾：刪除原始圖樣／格柵與真空物件（此為專案副本）──
-        _gen["phase"] = "收尾與存檔中"
+        _gen["phase"] = "收尾：刪除原始物件"
         try:
             hfss.modeler.delete(pattern_names + tile_names)
         except Exception:
             for n in pattern_names + tile_names:
                 _set_nonmodel(hfss, n)
 
-        # 重新指定 PerfE 給所有金屬複製體（複製貼上不會帶邊界）
-        if pasted_metal:
-            try:
-                hfss.assign_perfecte_to_sheets(pasted_metal, name="PerfE_array")
-            except Exception:
-                pass
+        # 真空物件（輻射盒）先刪除：掛在其面上的 Master/Slave 與 Floquet Port
+        # 只適用於單一 unit cell，一併移除後陣列才能重建自己的邊界
         if excluded_names:
             try:
                 hfss.modeler.delete(excluded_names)
@@ -545,7 +541,39 @@ def _run_generate(config: ArrayConfig):
                 for n in excluded_names:
                     _set_nonmodel(hfss, n)
 
+        # 刪除從 unit cell 帶入的 Optimetrics 參數掃描：它掃的是單元尺寸變數，
+        # 對陣列毫無意義，誤按執行會對上千個 sheet 跑數十個變化。
+        try:
+            opt = hfss.odesign.GetModule("Optimetrics")
+            opt_names = list(opt.GetSetupNames())
+            if opt_names:
+                opt.DeleteSetups(opt_names)
+        except Exception:
+            pass
+
+        # 重新指定 PerfE 給所有金屬複製體（複製貼上不會帶邊界）。
+        # 必須分批送出：單次傳入上千個物件會讓 gRPC 呼叫卡死且無法回報進度。
+        if pasted_metal:
+            BATCH = 100
+            total_m = len(pasted_metal)
+            for i in range(0, total_m, BATCH):
+                if _gen["cancel"]:
+                    break
+                _gen["phase"] = f"收尾：指定金屬邊界 {min(i + BATCH, total_m)}/{total_m}"
+                try:
+                    hfss.assign_perfecte_to_sheets(
+                        pasted_metal[i:i + BATCH], name=f"PerfE_array_{i // BATCH}")
+                except Exception:
+                    pass
+                # 每三批存檔一次，中途若發生異常不至於前功盡棄
+                if (i // BATCH) % 3 == 2:
+                    try:
+                        hfss.save_project()
+                    except Exception:
+                        pass
+
         # ── 模擬環境：空氣盒（λ/4 淨空）＋Radiation＋垂直入射平面波 ──
+        _gen["phase"] = "收尾：建立模擬環境"
         env_msg = ""
         try:
             wavelength_mm = 300.0 / config.frequency if config.frequency > 0 else 30.0
