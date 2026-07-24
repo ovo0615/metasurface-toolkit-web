@@ -35,8 +35,14 @@ export default function App() {
   const [sweepCfg, setSweepCfg] = useState({ lx_min_um: 600, lx_max_um: 2800, points: 9 })
   const [sweepStatus, setSweepStatus] = useState<SweepStatus | null>(null)
   const sweepPollRef = useRef<number | null>(null)
+  // 由專案自動帶入的欄位（帶入後鎖定，避免誤觸改動；可刻意解鎖）
+  const [autoFilled, setAutoFilled] = useState({ unit_cell_size: false, frequency: false })
+  const [fieldsUnlocked, setFieldsUnlocked] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
+
+  const cellLocked = autoFilled.unit_cell_size && !fieldsUnlocked
+  const freqLocked = autoFilled.frequency && !fieldsUnlocked
 
   // 元件卸載時停止輪詢
   useEffect(() => () => {
@@ -237,13 +243,18 @@ export default function App() {
     try {
       const res = await uploadProject(file)
       setProjectName(file.name)
-      // 自動帶入偵測到的專案參數（unit cell 尺寸、Setup 頻率）
+      // 自動帶入偵測到的專案參數（unit cell 尺寸、Setup 頻率）並鎖定
       if (res.detected) {
         setConfig(c => ({
           ...c,
           unit_cell_size: res.detected.unit_cell_size ?? c.unit_cell_size,
           frequency: res.detected.frequency ?? c.frequency,
         }))
+        setAutoFilled({
+          unit_cell_size: res.detected.unit_cell_size != null,
+          frequency: res.detected.frequency != null,
+        })
+        setFieldsUnlocked(false)
       }
       setMsg(res.message)
     } catch (e: any) {
@@ -253,7 +264,19 @@ export default function App() {
     if (projectInputRef.current) projectInputRef.current.value = ""
   }
 
-  const inputStyle = { width: '100%', padding: '8px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '4px' }
+  // 註：index.css 定義的是 --border-light／--text-main，先前誤用不存在的
+  //     --border／--bg-input／--text，導致所有輸入框其實都沒有框線。
+  const inputStyle = { width: '100%', padding: '8px', background: 'rgba(0,0,0,0.25)', border: '1px solid var(--border-light)', color: 'var(--text-main)', borderRadius: '4px' }
+  // 由專案帶入而鎖定的欄位：虛線框與淡字明確表示不可編輯，數值仍清楚可讀
+  const lockedInputStyle = {
+    ...inputStyle,
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px dashed var(--border-light)',
+    color: 'var(--text-muted)',
+    cursor: 'not-allowed' as const,
+  }
+  const labelRowStyle = { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }
+  const lockTagStyle = { fontSize: '0.72em', color: 'var(--text-muted)', whiteSpace: 'nowrap' as const }
 
   return (
     <div className="app-container">
@@ -348,13 +371,37 @@ export default function App() {
             </select>
           </label>
           <label>
-            Frequency [GHz]
-            <input type="number" value={config.frequency} onChange={e => setConfig({...config, frequency: parseFloat(e.target.value)})} style={inputStyle} />
+            <span style={labelRowStyle}>Frequency [GHz]{freqLocked && <span style={lockTagStyle}>🔒 由專案帶入</span>}</span>
+            <input
+              type="number"
+              value={config.frequency}
+              readOnly={freqLocked}
+              onChange={e => { if (!freqLocked) setConfig({...config, frequency: parseFloat(e.target.value)}) }}
+              style={freqLocked ? lockedInputStyle : inputStyle}
+            />
           </label>
           <label>
-            Unit Cell Size [mm]
-            <input type="number" value={config.unit_cell_size} onChange={e => setConfig({...config, unit_cell_size: parseFloat(e.target.value)})} style={inputStyle} />
+            <span style={labelRowStyle}>Unit Cell Size [mm]{cellLocked && <span style={lockTagStyle}>🔒 由專案帶入</span>}</span>
+            <input
+              type="number"
+              value={config.unit_cell_size}
+              readOnly={cellLocked}
+              onChange={e => { if (!cellLocked) setConfig({...config, unit_cell_size: parseFloat(e.target.value)}) }}
+              style={cellLocked ? lockedInputStyle : inputStyle}
+            />
           </label>
+          {(freqLocked || cellLocked) && (
+            <button
+              onClick={() => setFieldsUnlocked(true)}
+              style={{
+                alignSelf: 'flex-start', marginTop: '-8px', padding: 0,
+                background: 'none', border: 'none', color: 'var(--text-muted)',
+                fontSize: '0.8em', textDecoration: 'underline', cursor: 'pointer'
+              }}
+            >
+              解鎖編輯（偵測值與專案不符時才需要）
+            </button>
+          )}
           <label>
             Number of Elements
             <input type="number" value={config.num_elements} onChange={e => setConfig({...config, num_elements: parseInt(e.target.value)})} style={inputStyle} />
