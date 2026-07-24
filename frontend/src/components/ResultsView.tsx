@@ -5,6 +5,7 @@ import type { ResultsStatus } from '../api'
 interface Props {
   data: ResultsStatus
   onBack: () => void
+  onRefresh: () => void
 }
 
 const TITLES: Record<string, { name: string; hint: string }> = {
@@ -14,7 +15,7 @@ const TITLES: Record<string, { name: string; hint: string }> = {
 }
 const ORDER = ['cuts', 'pattern3d', 'efield']
 
-export default function ResultsView({ data, onBack }: Props) {
+export default function ResultsView({ data, onBack, onRefresh }: Props) {
   const [zoom, setZoom] = useState<string | null>(null)
   const images = data.images || {}
   const s = data.summary || {}
@@ -36,15 +37,27 @@ export default function ResultsView({ data, onBack }: Props) {
     <div style={{ width: '100%', height: '100%', overflowY: 'auto', background: '#0e121a', padding: '20px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
         <h3 style={{ margin: 0, color: 'var(--accent)' }}>模擬結果</h3>
-        <button
-          onClick={onBack}
-          style={{
-            padding: '6px 14px', borderRadius: '4px', cursor: 'pointer',
-            border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-main)'
-          }}
-        >
-          ← 返回陣列佈局
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={onRefresh}
+            title="重新從 AEDT 讀取最新結果（會重跑，較耗時）"
+            style={{
+              padding: '6px 14px', borderRadius: '4px', cursor: 'pointer',
+              border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-muted)'
+            }}
+          >
+            ⟳ 重新讀取
+          </button>
+          <button
+            onClick={onBack}
+            style={{
+              padding: '6px 14px', borderRadius: '4px', cursor: 'pointer',
+              border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-main)'
+            }}
+          >
+            ← 返回陣列佈局
+          </button>
+        </div>
       </div>
 
       {/* 波束品質指標 */}

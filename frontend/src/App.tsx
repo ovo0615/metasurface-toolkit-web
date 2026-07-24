@@ -39,6 +39,9 @@ export default function App() {
   // 模擬結果（圖檔與波束指向數值）
   const [resStatus, setResStatus] = useState<ResultsStatus | null>(null)
   const [results, setResults] = useState<ResultsStatus | null>(null)
+  // 是否顯示結果檢視。與 results 分開：返回佈局時只關閉檢視，保留已讀取的結果，
+  // 再次開啟不必重跑。
+  const [showResults, setShowResults] = useState(false)
   const resPollRef = useRef<number | null>(null)
   // 由專案自動帶入的欄位（帶入後鎖定，避免誤觸改動；可刻意解鎖）
   const [autoFilled, setAutoFilled] = useState({ unit_cell_size: false, frequency: false })
@@ -56,7 +59,12 @@ export default function App() {
     if (resPollRef.current) clearInterval(resPollRef.current)
   }, [])
 
-  const handleResults = async () => {
+  const handleResults = async (force = false) => {
+    // 已有讀取過的結果且非強制刷新：直接顯示快取，不重跑
+    if (results && !force) {
+      setShowResults(true)
+      return
+    }
     setMsg("正在讀取模擬結果...")
     try {
       const res = await startResults(config)
@@ -77,7 +85,8 @@ export default function App() {
             if (s.error) {
               setMsg(`發生錯誤：${s.error}`)
             } else {
-              setResults(s)          // 切換到結果檢視
+              setResults(s)          // 快取結果並切換到結果檢視
+              setShowResults(true)
               setMsg(s.result || "結果已產生。")
             }
           }
@@ -496,10 +505,12 @@ export default function App() {
             <button
               className="premium-btn"
               style={{ width: '100%', background: '#6a1b9a', marginTop: '10px' }}
-              onClick={handleResults}
+              onClick={() => handleResults(false)}
               disabled={loading || !!resStatus || !!sweepStatus}
             >
-              {resStatus ? `讀取中：${resStatus.phase}` : "📊 顯示模擬結果"}
+              {resStatus ? `讀取中：${resStatus.phase}`
+                : results ? "📊 檢視模擬結果（已載入）"
+                : "📊 讀取模擬結果"}
             </button>
           )}
           {resStatus && (
@@ -542,8 +553,12 @@ export default function App() {
 
       {/* 中央預覽：尚未提供資料前顯示引導畫面 */}
       <div style={{ flex: 1, position: 'relative' }}>
-        {results ? (
-          <ResultsView data={results} onBack={() => setResults(null)} />
+        {showResults && results ? (
+          <ResultsView
+            data={results}
+            onBack={() => setShowResults(false)}
+            onRefresh={() => { setShowResults(false); handleResults(true) }}
+          />
         ) : !dataReady ? (
           <div style={{
             width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
