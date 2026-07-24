@@ -1,9 +1,10 @@
 // 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
 import React, { useState, useEffect, useRef } from 'react'
 import Preview2D from './components/Preview2D'
+import ResultsView from './components/ResultsView'
 import type { PreviewData } from './components/Preview2D'
-import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt, getGenerateStatus, cancelGenerate, startSweep, getSweepStatus, cancelSweep } from './api'
-import type { ArrayConfig, GenerateStatus, SweepStatus } from './api'
+import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt, getGenerateStatus, cancelGenerate, startSweep, getSweepStatus, cancelSweep, startResults, getResultsStatus } from './api'
+import type { ArrayConfig, GenerateStatus, SweepStatus, ResultsStatus } from './api'
 import './index.css'
 
 export default function App() {
@@ -35,6 +36,10 @@ export default function App() {
   const [sweepCfg, setSweepCfg] = useState({ lx_min_um: 600, lx_max_um: 2800, points: 9 })
   const [sweepStatus, setSweepStatus] = useState<SweepStatus | null>(null)
   const sweepPollRef = useRef<number | null>(null)
+  // 模擬結果（圖檔與波束指向數值）
+  const [resStatus, setResStatus] = useState<ResultsStatus | null>(null)
+  const [results, setResults] = useState<ResultsStatus | null>(null)
+  const resPollRef = useRef<number | null>(null)
   // 由專案自動帶入的欄位（帶入後鎖定，避免誤觸改動；可刻意解鎖）
   const [autoFilled, setAutoFilled] = useState({ unit_cell_size: false, frequency: false })
   const [fieldsUnlocked, setFieldsUnlocked] = useState(false)
@@ -48,7 +53,40 @@ export default function App() {
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current)
     if (sweepPollRef.current) clearInterval(sweepPollRef.current)
+    if (resPollRef.current) clearInterval(resPollRef.current)
   }, [])
+
+  const handleResults = async () => {
+    setMsg("正在讀取模擬結果...")
+    try {
+      const res = await startResults(config)
+      if (res.status !== "started") {
+        setMsg(res.message)
+        return
+      }
+      setResStatus({ running: true, current: 0, total: 4, phase: "準備中", images: null, summary: null, result: null, error: null })
+      if (resPollRef.current) clearInterval(resPollRef.current)
+      resPollRef.current = window.setInterval(async () => {
+        try {
+          const s = await getResultsStatus()
+          setResStatus(s)
+          if (!s.running) {
+            if (resPollRef.current) clearInterval(resPollRef.current)
+            resPollRef.current = null
+            setResStatus(null)
+            if (s.error) {
+              setMsg(`發生錯誤：${s.error}`)
+            } else {
+              setResults(s)          // 切換到結果檢視
+              setMsg(s.result || "結果已產生。")
+            }
+          }
+        } catch { /* 下一秒再試 */ }
+      }, 1000)
+    } catch (e: any) {
+      setMsg(e.message || "讀取結果失敗")
+    }
+  }
 
   const handleSweep = async () => {
     setMsg("正在啟動相位掃描...")
@@ -454,6 +492,25 @@ export default function App() {
             )}
           </div>
 
+          {!genStatus && (
+            <button
+              className="premium-btn"
+              style={{ width: '100%', background: '#6a1b9a', marginTop: '10px' }}
+              onClick={handleResults}
+              disabled={loading || !!resStatus || !!sweepStatus}
+            >
+              {resStatus ? `讀取中：${resStatus.phase}` : "📊 顯示模擬結果"}
+            </button>
+          )}
+          {resStatus && (
+            <div style={{ marginTop: '8px', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: '3px', background: '#ab47bc',
+                width: `${(resStatus.current / resStatus.total * 100).toFixed(0)}%`, transition: 'width 0.5s'
+              }} />
+            </div>
+          )}
+
           {/* 建模進度 */}
           {genStatus && (
             <div style={{ marginTop: '12px' }}>
@@ -485,7 +542,9 @@ export default function App() {
 
       {/* 中央預覽：尚未提供資料前顯示引導畫面 */}
       <div style={{ flex: 1, position: 'relative' }}>
-        {!dataReady ? (
+        {results ? (
+          <ResultsView data={results} onBack={() => setResults(null)} />
+        ) : !dataReady ? (
           <div style={{
             width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center', gap: '12px',

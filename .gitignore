@@ -34,3 +34,6 @@ Thumbs.db
 # AEDT 執行紀錄
 batch.log
 *.log
+
+# 模擬結果圖檔（執行期產生）
+backend/app/static/results/

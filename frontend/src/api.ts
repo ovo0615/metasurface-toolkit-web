@@ -88,6 +88,33 @@ export const cancelSweep = async () => {
   return res.json();
 };
 
+export interface ResultsStatus {
+  running: boolean;
+  current: number;
+  total: number;
+  phase: string;
+  images: Record<string, string> | null;
+  summary: Record<string, any> | null;
+  result: string | null;
+  error: string | null;
+}
+
+export const startResults = async (config: ArrayConfig) => {
+  const res = await fetch("/api/results", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error("Failed to start results");
+  return res.json();
+};
+
+export const getResultsStatus = async (): Promise<ResultsStatus> => {
+  const res = await fetch("/api/results/status");
+  if (!res.ok) throw new Error("Failed to fetch results status");
+  return res.json();
+};
+
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
   formData.append("file", file);
