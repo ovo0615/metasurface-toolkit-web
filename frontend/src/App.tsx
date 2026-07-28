@@ -42,9 +42,9 @@ export default function App() {
   // 是否顯示結果檢視。與 results 分開：返回佈局時只關閉檢視，保留已讀取的結果，
   // 再次開啟不必重跑。
   const [showResults, setShowResults] = useState(false)
-  // 結果讀取選項：3D 方向圖預設關閉（大陣列可能要跑十餘分鐘）
+  // 結果讀取選項：實測切面 14 秒、3D 16 秒，但電場圖在大陣列逾 7 分鐘，故僅電場預設關閉
   const [resOpts, setResOpts] = useState<ResultsOptions>({
-    want_efield: true, want_cuts: true, want_3d: false, pattern3d_step: 10
+    want_efield: false, want_cuts: true, want_3d: true, pattern3d_step: 5
   })
   const resPollRef = useRef<number | null>(null)
   // 由專案自動帶入的欄位（帶入後鎖定，避免誤觸改動；可刻意解鎖）
@@ -544,32 +544,32 @@ export default function App() {
                 <input type="checkbox" checked={resOpts.want_cuts}
                        onChange={e => setResOpts({ ...resOpts, want_cuts: e.target.checked })} />
                 遠場切面圖＋波束指標
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>約 15 秒</span>
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em', marginBottom: '4px' }}>
-                <input type="checkbox" checked={resOpts.want_efield}
-                       onChange={e => setResOpts({ ...resOpts, want_efield: e.target.checked })} />
-                表面電場分佈
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em' }}>
                 <input type="checkbox" checked={resOpts.want_3d}
                        onChange={e => setResOpts({ ...resOpts, want_3d: e.target.checked })} />
                 3D 立體方向圖
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>約 15 秒</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em' }}>
+                <input type="checkbox" checked={resOpts.want_efield}
+                       onChange={e => setResOpts({ ...resOpts, want_efield: e.target.checked })} />
+                表面電場分佈
+                <span style={{ color: '#ff9800', fontSize: '0.85em' }}>大陣列逾 7 分鐘</span>
               </label>
               {resOpts.want_3d && (
                 <div style={{ marginTop: '6px', paddingLeft: '22px' }}>
                   <label style={{ fontSize: '0.78em', color: 'var(--text-muted)' }}>
-                    取樣步進 [°]（越小越精細、越慢）
+                    取樣步進 [°]（越小越精細）
                     <select value={resOpts.pattern3d_step}
                             onChange={e => setResOpts({ ...resOpts, pattern3d_step: parseFloat(e.target.value) })}
                             style={{ ...inputStyle, marginTop: '3px' }}>
-                      <option value={15}>15°（最快）</option>
-                      <option value={10}>10°（建議）</option>
-                      <option value={5}>5°（精細，約慢 4 倍）</option>
+                      <option value={10}>10°（較粗）</option>
+                      <option value={5}>5°（建議）</option>
+                      <option value={2}>2°（最精細）</option>
                     </select>
                   </label>
-                  <div style={{ fontSize: '0.75em', color: '#ff9800', marginTop: '5px', lineHeight: 1.5 }}>
-                    ⚠ 大陣列的 3D 方向圖需對數千個方向做遠場積分，可能耗時十餘分鐘。
-                  </div>
                 </div>
               )}
               <button

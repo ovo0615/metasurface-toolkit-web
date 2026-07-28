@@ -906,12 +906,15 @@ _res = {"running": False, "current": 0, "total": 4, "phase": "",
 _res_lock = threading.Lock()
 
 class ResultsOptions(ArrayConfig):
-    """結果讀取選項。3D 方向圖預設關閉——它要對數千個方向逐一做遠場積分，
-    大陣列可能耗時十餘分鐘，遠比其他項目重。"""
-    want_efield: bool = True
+    """結果讀取選項。預設值依 39.9MB 大陣列（約 1350 個金屬面）的實測耗時決定：
+      遠場切面＋指標  約 14 秒
+      3D 方向圖       約 16 秒（5° 與 10° 取樣幾乎同速）
+      表面電場圖      逾 7 分鐘 ← 唯一的重項目，故預設關閉
+    電場圖之所以慢，是因為要對全部金屬面計算並算繪場值，成本隨陣列規模暴增。"""
+    want_efield: bool = False
     want_cuts: bool = True
-    want_3d: bool = False
-    pattern3d_step: float = 10.0   # 3D 遠場球取樣步進（度）；5° 會慢約 4 倍
+    want_3d: bool = True
+    pattern3d_step: float = 5.0    # 3D 遠場球取樣步進（度）
 
 def _export_report_jpg(hfss, plot_name):
     """匯出報告圖檔並回傳可供前端存取的 URL（加時間戳避免瀏覽器快取）。"""
@@ -982,6 +985,14 @@ def _run_results(config: ArrayConfig):
         if already_open:
             hfss = Hfss(project=proj_name, non_graphical=False, new_desktop=False)
         else:
+            # 專案未開啟卻留有鎖檔＝前次工作階段異常結束的殘留（例如後端被中止）。
+            # 這是本工具在 static/ 自行產生的工作副本，清除殘留鎖檔是安全的。
+            stale_lock = array_path + ".lock"
+            if os.path.exists(stale_lock):
+                try:
+                    os.remove(stale_lock)
+                except Exception:
+                    pass
             hfss = Hfss(project=array_path, non_graphical=False, new_desktop=False)
 
         if not hfss.setups:
@@ -1173,11 +1184,12 @@ def _run_results(config: ArrayConfig):
         publish()
 
         # ④ 三維立體方向圖（選用）——方向數 = (180/step+1) × (360/step)，
-        #    step 10° 約 684 個方向，5° 則約 2664 個，時間差約 4 倍。
+        #    5° 約 2664 個、10° 約 684 個，但實測兩者都約 16 秒：
+        #    成本主要在載入場解，而非逐方向積分。
         if config.want_3d:
             done += 1
             step3d = max(2.0, float(config.pattern3d_step or 10.0))
-            _res.update(phase=f"產生 3D 方向圖（{step3d:g}° 取樣，較耗時）", current=done)
+            _res.update(phase=f"產生 3D 方向圖（{step3d:g}° 取樣）", current=done)
             try:
                 sph = f"FarField_3D_{step3d:g}".replace(".", "p")
                 if sph not in [f.name for f in hfss.field_setups]:
