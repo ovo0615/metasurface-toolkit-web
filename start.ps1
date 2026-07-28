@@ -45,14 +45,22 @@ function Find-CompatiblePython {
     $candidates = @()
     if (Get-Command py -ErrorAction SilentlyContinue) {
         foreach ($ver in @("3.12", "3.11", "3.10", "3.9")) {
-            & py "-$ver-64" -c "exit()" 2>$null
-            if ($LASTEXITCODE -eq 0) { $candidates += "py -$ver-64" }
+            # py.exe 找不到指定版本時會寫入 stderr（"No suitable Python runtime found"）。
+            # 在 $ErrorActionPreference = "Stop" 下，即使用 2>$null 導向，PowerShell 5.1
+            # 仍會先把該行 stderr 包成終止例外(NativeCommandError)才套用重導向，導致腳本中止。
+            # 必須用 try/catch 吞掉，才能繼續嘗試下一個版本。
+            try {
+                & py "-$ver-64" -c "exit()" 2>$null
+                if ($LASTEXITCODE -eq 0) { $candidates += "py -$ver-64" }
+            } catch { }
         }
     }
     foreach ($cmd in @("python3.12", "python3.11", "python3.10", "python3.9", "python")) {
         if (Get-Command $cmd -ErrorAction SilentlyContinue) {
-            $verOut = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-            if ($verOut -match "^3\.(9|10|11|12)$") { $candidates += $cmd }
+            try {
+                $verOut = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+                if ($verOut -match "^3\.(9|10|11|12)$") { $candidates += $cmd }
+            } catch { }
         }
     }
     return $candidates
