@@ -11,8 +11,8 @@
 
 > © 2020 ANSYS, Inc. — Sharon Varghese、Nijas Kunju、Mahesh Babu
 
-原版為 AEDT 內建的 IronPython 桌面工具（見 `Metasurface_ToolkitV3/`，一併保留於本專案供對照）。本專案將其設計流程重新實作為
-React + FastAPI 的網頁應用，並擴充了 UnitCell 相位自動掃描、HFSS 全自動建模、模擬結果讀取（遠場方向圖、波束品質指標等）等原版沒有的功能。
+原版為 AEDT 內建的 IronPython 桌面工具。本專案將其設計流程重新實作為 React + FastAPI 的網頁應用，
+並擴充了 UnitCell 相位自動掃描、HFSS 全自動建模、模擬結果讀取（遠場方向圖、波束品質指標等）等原版沒有的功能。
 
 ## 功能
 
@@ -133,7 +133,6 @@ Butterfly_element.aedtz    蝴蝶結單元範例專案（10 GHz、cell 8 mm）
 Butterfly_Phase_dim_TEST.csv  蝴蝶結示範用相位表（合成資料，非模擬結果）
 Phase_dim_PG_45.csv        內建相位對照表（140 GHz、cell 1 mm 設計用）
 MetaSurfaceToolkit.pdf     原版 Ansys 工具簡報（原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu）
-Metasurface_ToolkitV3/     原版桌面工具（IronPython，參考用）
 ```
 
 執行期產生的檔案以專案名稱為前綴：`_master.aedt`（母本）、`_array.aedt`（陣列成品）、
@@ -141,5 +140,5 @@ Metasurface_ToolkitV3/     原版桌面工具（IronPython，參考用）
 
 ## 授權
 
-本專案以 [MIT License](LICENSE) 釋出。`MetaSurfaceToolkit.pdf` 與 `Metasurface_ToolkitV3/` 為
-Ansys 原版工具的簡報與程式，其著作權仍屬原作者與 Ansys, Inc. 所有，僅作為設計參考附於本專案中。
+本專案以 [MIT License](LICENSE) 釋出。`MetaSurfaceToolkit.pdf` 為 Ansys 原版工具簡報，
+其著作權仍屬原作者與 Ansys, Inc. 所有，僅作為設計參考附於本專案中。
