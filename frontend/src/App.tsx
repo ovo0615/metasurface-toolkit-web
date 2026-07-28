@@ -4,7 +4,7 @@ import Preview2D from './components/Preview2D'
 import ResultsView from './components/ResultsView'
 import type { PreviewData } from './components/Preview2D'
 import { fetchPreview, generateModel, uploadFile, uploadProject, releaseAedt, getGenerateStatus, cancelGenerate, startSweep, getSweepStatus, cancelSweep, startResults, getResultsStatus } from './api'
-import type { ArrayConfig, GenerateStatus, SweepStatus, ResultsStatus } from './api'
+import type { ArrayConfig, GenerateStatus, SweepStatus, ResultsStatus, ResultsOptions } from './api'
 import './index.css'
 
 export default function App() {
@@ -42,6 +42,10 @@ export default function App() {
   // 是否顯示結果檢視。與 results 分開：返回佈局時只關閉檢視，保留已讀取的結果，
   // 再次開啟不必重跑。
   const [showResults, setShowResults] = useState(false)
+  // 結果讀取選項：3D 方向圖預設關閉（大陣列可能要跑十餘分鐘）
+  const [resOpts, setResOpts] = useState<ResultsOptions>({
+    want_efield: true, want_cuts: true, want_3d: false, pattern3d_step: 10
+  })
   const resPollRef = useRef<number | null>(null)
   // 由專案自動帶入的欄位（帶入後鎖定，避免誤觸改動；可刻意解鎖）
   const [autoFilled, setAutoFilled] = useState({ unit_cell_size: false, frequency: false })
@@ -67,17 +71,24 @@ export default function App() {
     }
     setMsg("正在讀取模擬結果...")
     try {
-      const res = await startResults(config)
+      const res = await startResults(config, resOpts)
       if (res.status !== "started") {
         setMsg(res.message)
         return
       }
-      setResStatus({ running: true, current: 0, total: 4, phase: "準備中", images: null, summary: null, result: null, error: null })
+      const nSteps = (resOpts.want_efield ? 1 : 0) + (resOpts.want_cuts ? 1 : 0) + 1 + (resOpts.want_3d ? 1 : 0)
+      setResStatus({ running: true, current: 0, total: nSteps, phase: "準備中", images: null, summary: null, result: null, error: null })
+      setResults(null)       // 先清掉舊結果，避免新舊混淆
       if (resPollRef.current) clearInterval(resPollRef.current)
       resPollRef.current = window.setInterval(async () => {
         try {
           const s = await getResultsStatus()
           setResStatus(s)
+          // 漸進顯示：只要後端已產出任何一張圖就先秀出來，不必等全部跑完
+          if (s.images && Object.keys(s.images).length > 0) {
+            setResults(s)
+            setShowResults(true)
+          }
           if (!s.running) {
             if (resPollRef.current) clearInterval(resPollRef.current)
             resPollRef.current = null
@@ -85,7 +96,7 @@ export default function App() {
             if (s.error) {
               setMsg(`發生錯誤：${s.error}`)
             } else {
-              setResults(s)          // 快取結果並切換到結果檢視
+              setResults(s)
               setShowResults(true)
               setMsg(s.result || "結果已產生。")
             }
@@ -329,6 +340,31 @@ export default function App() {
     <div className="app-container">
       {/* 左側面板 - 參數控制 */}
       <div className="glass-panel" style={{ width: '320px', padding: '20px', overflowY: 'auto', flexShrink: 0 }}>
+        {/* 虎門科技 LOGO */}
+        <div style={{
+          background: 'rgba(255,255,255,0.96)',
+          borderRadius: '10px',
+          padding: '10px 14px',
+          marginBottom: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
+          border: '1px solid rgba(255,255,255,0.15)'
+        }}>
+          <img
+            src="/logo.png"
+            alt="虎門科技 CADMEN Logo"
+            style={{
+              maxWidth: '100%',
+              height: 'auto',
+              maxHeight: '52px',
+              objectFit: 'contain',
+              display: 'block'
+            }}
+          />
+        </div>
+        <div style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', marginBottom: '16px' }} />
         <h2 style={{ color: 'var(--accent)', marginTop: 0 }}>Metasurface Toolkit</h2>
         <p style={{ fontSize: '0.9em', color: 'var(--text-muted)' }}>此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供</p>
         
@@ -502,23 +538,64 @@ export default function App() {
           </div>
 
           {!genStatus && (
-            <button
-              className="premium-btn"
-              style={{ width: '100%', background: '#6a1b9a', marginTop: '10px' }}
-              onClick={() => handleResults(false)}
-              disabled={loading || !!resStatus || !!sweepStatus}
-            >
-              {resStatus ? `讀取中：${resStatus.phase}`
-                : results ? "📊 檢視模擬結果（已載入）"
-                : "📊 讀取模擬結果"}
-            </button>
-          )}
-          {resStatus && (
-            <div style={{ marginTop: '8px', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', borderRadius: '3px', background: '#ab47bc',
-                width: `${(resStatus.current / resStatus.total * 100).toFixed(0)}%`, transition: 'width 0.5s'
-              }} />
+            <div style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '6px', marginTop: '10px' }}>
+              <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '8px' }}>模擬結果項目：</div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em', marginBottom: '4px' }}>
+                <input type="checkbox" checked={resOpts.want_cuts}
+                       onChange={e => setResOpts({ ...resOpts, want_cuts: e.target.checked })} />
+                遠場切面圖＋波束指標
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em', marginBottom: '4px' }}>
+                <input type="checkbox" checked={resOpts.want_efield}
+                       onChange={e => setResOpts({ ...resOpts, want_efield: e.target.checked })} />
+                表面電場分佈
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em' }}>
+                <input type="checkbox" checked={resOpts.want_3d}
+                       onChange={e => setResOpts({ ...resOpts, want_3d: e.target.checked })} />
+                3D 立體方向圖
+              </label>
+              {resOpts.want_3d && (
+                <div style={{ marginTop: '6px', paddingLeft: '22px' }}>
+                  <label style={{ fontSize: '0.78em', color: 'var(--text-muted)' }}>
+                    取樣步進 [°]（越小越精細、越慢）
+                    <select value={resOpts.pattern3d_step}
+                            onChange={e => setResOpts({ ...resOpts, pattern3d_step: parseFloat(e.target.value) })}
+                            style={{ ...inputStyle, marginTop: '3px' }}>
+                      <option value={15}>15°（最快）</option>
+                      <option value={10}>10°（建議）</option>
+                      <option value={5}>5°（精細，約慢 4 倍）</option>
+                    </select>
+                  </label>
+                  <div style={{ fontSize: '0.75em', color: '#ff9800', marginTop: '5px', lineHeight: 1.5 }}>
+                    ⚠ 大陣列的 3D 方向圖需對數千個方向做遠場積分，可能耗時十餘分鐘。
+                  </div>
+                </div>
+              )}
+              <button
+                className="premium-btn"
+                style={{ width: '100%', background: '#6a1b9a', marginTop: '10px' }}
+                onClick={() => handleResults(false)}
+                disabled={loading || !!resStatus || !!sweepStatus ||
+                          (!resOpts.want_cuts && !resOpts.want_efield && !resOpts.want_3d)}
+              >
+                {resStatus ? `讀取中：${resStatus.phase}`
+                  : results ? "📊 檢視模擬結果（已載入）"
+                  : "📊 讀取模擬結果"}
+              </button>
+              {resStatus && (
+                <>
+                  <div style={{ marginTop: '8px', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', borderRadius: '3px', background: '#ab47bc',
+                      width: `${(resStatus.current / Math.max(1, resStatus.total) * 100).toFixed(0)}%`, transition: 'width 0.5s'
+                    }} />
+                  </div>
+                  <div style={{ fontSize: '0.78em', color: 'var(--text-muted)', marginTop: '5px' }}>
+                    {resStatus.current} / {resStatus.total} 項；完成一項就會即時顯示
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -558,6 +635,7 @@ export default function App() {
             data={results}
             onBack={() => setShowResults(false)}
             onRefresh={() => { setShowResults(false); handleResults(true) }}
+            loadingPhase={resStatus ? resStatus.phase : null}
           />
         ) : !dataReady ? (
           <div style={{

@@ -905,6 +905,14 @@ _res = {"running": False, "current": 0, "total": 4, "phase": "",
         "images": None, "summary": None, "result": None, "error": None}
 _res_lock = threading.Lock()
 
+class ResultsOptions(ArrayConfig):
+    """結果讀取選項。3D 方向圖預設關閉——它要對數千個方向逐一做遠場積分，
+    大陣列可能耗時十餘分鐘，遠比其他項目重。"""
+    want_efield: bool = True
+    want_cuts: bool = True
+    want_3d: bool = False
+    pattern3d_step: float = 10.0   # 3D 遠場球取樣步進（度）；5° 會慢約 4 倍
+
 def _export_report_jpg(hfss, plot_name):
     """匯出報告圖檔並回傳可供前端存取的 URL（加時間戳避免瀏覽器快取）。"""
     hfss.post.export_report_to_jpg(results_dir, plot_name)
@@ -1003,22 +1011,21 @@ def _run_results(config: ArrayConfig):
             pass
         freq_str = f"{freq_ghz:g}GHz"
 
-        # 口徑：非真空物件（排除空氣盒）的實際 XY 範圍
+        # 口徑量測。務必避免「逐一查詢每個物件」——每個物件的 material_name 與
+        # bounding_box 各是一次 gRPC 往返，上千個物件會累積成好幾分鐘。
+        # 改為單次取得整體邊界盒（含空氣盒），再扣掉本工具建立空氣盒時用的 λ/4 淨空。
+        _res.update(phase="量測陣列口徑")
         ap_mm = None
         try:
             u_mm = _UNIT_TO_MM.get((hfss.modeler.model_units or "mm").lower(), 1.0)
-            xs, ys = [], []
-            for n in hfss.modeler.object_names:
-                try:
-                    mat = (hfss.modeler[n].material_name or "").lower()
-                except Exception:
-                    mat = ""
-                if mat in ("vacuum", "air"):
-                    continue
-                bb = hfss.modeler[n].bounding_box
-                xs += [bb[0], bb[3]]; ys += [bb[1], bb[4]]
-            if xs:
-                ap_mm = max(max(xs) - min(xs), max(ys) - min(ys)) * u_mm
+            lam_mm = 300.0 / freq_ghz if freq_ghz > 0 else 30.0
+            bb = hfss.modeler.get_model_bounding_box()   # 單次呼叫
+            if bb and len(bb) >= 6:
+                span = max(float(bb[3]) - float(bb[0]), float(bb[4]) - float(bb[1])) * u_mm
+                has_airbox = "airbox_array" in hfss.modeler.object_names
+                ap_mm = span - 2 * (lam_mm / 4.0) if has_airbox else span
+                if ap_mm <= 0:
+                    ap_mm = None
         except Exception:
             pass
 
@@ -1039,125 +1046,163 @@ def _run_results(config: ArrayConfig):
         except Exception:
             pass
 
+        # 依「由輕到重」的順序產生，每完成一項就立即回報，
+        # 讓前端不必等全部跑完就能看到已完成的圖。
+        def publish():
+            _res["images"] = dict(images)
+            _res["summary"] = dict(summary)
+
+        steps = []
+        if config.want_efield:
+            steps.append("efield")
+        if config.want_cuts:
+            steps.append("cuts")
+        steps.append("metrics")
+        if config.want_3d:
+            steps.append("pattern3d")
+        _res["total"] = len(steps)
+        done = 0
+
         # ① 表面電場分佈（最上層金屬）
         # 註：必須在建立遠場報告之前執行，否則 AEDT 會拒絕建立場圖
-        _res.update(phase="產生表面電場圖", current=1)
-        try:
-            metal = [n for n in hfss.modeler.object_names
-                     if n.startswith("Polyline") or n.startswith("out")]
-            if not metal:
-                summary["efield_note"] = "找不到金屬物件，略過表面電場圖。"
-            else:
-                zmax = max(hfss.modeler[n].bounding_box[5] for n in metal)
-                top = [n for n in metal
-                       if abs(hfss.modeler[n].bounding_box[5] - zmax) < 1e-6]
-                # 沿用同名場圖會與既有定義衝突而建立失敗，每次用唯一名稱並清掉舊的
-                for old in list(hfss.post.field_plot_names):
-                    if old.startswith("Efield_Top"):
-                        try:
-                            hfss.post.delete_field_plot(old)
-                        except Exception:
-                            pass
-                plot_name = f"Efield_Top_{int(time.time())}"
-                fp = hfss.post.create_fieldplot_surface(
-                    top, "Mag_E",
-                    intrinsics={"Freq": freq_str, "Phase": "0deg"},
-                    plot_name=plot_name)
-                if not fp:
-                    summary["efield_note"] = "AEDT 未能建立表面電場圖（可能是解中沒有場資料）。"
+        if config.want_efield:
+            done += 1
+            _res.update(phase="產生表面電場圖", current=done)
+            try:
+                metal = [n for n in hfss.modeler.object_names
+                         if n.startswith("Polyline") or n.startswith("out")]
+                if not metal:
+                    summary["efield_note"] = "找不到金屬物件，略過表面電場圖。"
                 else:
-                    jpg = os.path.join(results_dir, "Efield_Top.jpg")
-                    hfss.post.export_field_jpg(jpg, plot_name, "Fields")
-                    if os.path.exists(jpg):
-                        images["efield"] = f"/static/results/Efield_Top.jpg?t={int(time.time())}"
+                    # 挑出最上層金屬需要逐一查 bounding_box（每次一個 gRPC 往返），
+                    # 物件多時代價極高，因此僅在小模型才精挑，大陣列直接用全部金屬。
+                    if len(metal) <= 150:
+                        zmax = max(hfss.modeler[n].bounding_box[5] for n in metal)
+                        top = [n for n in metal
+                               if abs(hfss.modeler[n].bounding_box[5] - zmax) < 1e-6]
                     else:
-                        summary["efield_note"] = "表面電場圖匯出失敗（檔案未產生）。"
-        except Exception as e:
-            summary["efield_note"] = f"表面電場圖產生失敗：{e}"
+                        top = metal
+                        summary["efield_note"] = (
+                            f"金屬物件較多（{len(metal)} 件），電場圖顯示全部金屬層"
+                            "（未篩選最上層，以避免逐一查詢造成的長時間等待）。")
+                    for old in list(hfss.post.field_plot_names):
+                        if old.startswith("Efield_Top"):
+                            try:
+                                hfss.post.delete_field_plot(old)
+                            except Exception:
+                                pass
+                    plot_name = f"Efield_Top_{int(time.time())}"
+                    fp = hfss.post.create_fieldplot_surface(
+                        top, "Mag_E",
+                        intrinsics={"Freq": freq_str, "Phase": "0deg"},
+                        plot_name=plot_name)
+                    if not fp:
+                        summary["efield_note"] = "AEDT 未能建立表面電場圖（可能是解中沒有場資料）。"
+                    else:
+                        jpg = os.path.join(results_dir, "Efield_Top.jpg")
+                        hfss.post.export_field_jpg(jpg, plot_name, "Fields")
+                        if os.path.exists(jpg):
+                            images["efield"] = f"/static/results/Efield_Top.jpg?t={int(time.time())}"
+                        else:
+                            summary["efield_note"] = "表面電場圖匯出失敗（檔案未產生）。"
+            except Exception as e:
+                summary["efield_note"] = f"表面電場圖產生失敗：{e}"
+            publish()
 
-        # ② 遠場方向圖（二維切面）
-        _res.update(phase="產生遠場切面圖", current=2)
-        ff_names = [f.name for f in hfss.field_setups]
-        if "FarField_Cuts" not in ff_names:
-            hfss.insert_infinite_sphere(theta_start=-180, theta_stop=180, theta_step=2,
-                                        phi_start=0, phi_stop=90, phi_step=90,
-                                        name="FarField_Cuts")
-        rpt = hfss.post.create_report(
-            expressions=["dB(rETotal)"], report_category="Far Fields",
-            context="FarField_Cuts", setup_sweep_name=sweep,
-            primary_sweep_variable="Theta",
-            variations={"Phi": ["0deg", "90deg"], "Freq": [freq_str]},
-            plot_name="ScatteredField_Cuts")
-        if rpt:
-            images["cuts"] = _export_report_jpg(hfss, "ScatteredField_Cuts")
+        # ② 遠場方向圖（二維切面）——只掃兩個 phi 平面，遠比 3D 輕
+        rpt = None
+        if config.want_cuts:
+            done += 1
+            _res.update(phase="產生遠場切面圖", current=done)
+            try:
+                if "FarField_Cuts" not in [f.name for f in hfss.field_setups]:
+                    hfss.insert_infinite_sphere(theta_start=-180, theta_stop=180, theta_step=2,
+                                                phi_start=0, phi_stop=90, phi_step=90,
+                                                name="FarField_Cuts")
+                rpt = hfss.post.create_report(
+                    expressions=["dB(rETotal)"], report_category="Far Fields",
+                    context="FarField_Cuts", setup_sweep_name=sweep,
+                    primary_sweep_variable="Theta",
+                    variations={"Phi": ["0deg", "90deg"], "Freq": [freq_str]},
+                    plot_name="ScatteredField_Cuts")
+                if rpt:
+                    images["cuts"] = _export_report_jpg(hfss, "ScatteredField_Cuts")
+            except Exception as e:
+                summary["cuts_note"] = f"遠場切面圖產生失敗：{e}"
+            publish()
 
-        # ③ 三維立體方向圖
-        _res.update(phase="產生 3D 方向圖", current=3)
-        ff_names = [f.name for f in hfss.field_setups]
-        if "FarField_3D" not in ff_names:
-            hfss.insert_infinite_sphere(theta_start=0, theta_stop=180, theta_step=5,
-                                        phi_start=0, phi_stop=355, phi_step=5,
-                                        name="FarField_3D")
-        r3 = hfss.post.create_report(
-            expressions=["dB(rETotal)"], report_category="Far Fields",
-            context="FarField_3D", setup_sweep_name=sweep,
-            plot_type="3D Polar Plot",
-            primary_sweep_variable="Phi", secondary_sweep_variable="Theta",
-            variations={"Freq": [freq_str]}, plot_name="Pattern3D")
-        if r3:
-            images["pattern3d"] = _export_report_jpg(hfss, "Pattern3D")
-
-        # ④ 波束品質指標：RCS、指向、波束寬、旁瓣（平面波照射下 gain 無定義，
-        #    改以雙站 RCS 表示絕對強度：RCS = 4π|rE|²/|Einc|²，Einc 為預設 1 V/m）
-        _res.update(phase="計算波束指標", current=4)
+        # ③ 波束品質指標——改由切面資料計算（2° 解析度優於 3D 的 5°/10°），
+        #    因此不需要 3D 方向圖也能取得完整指標。
+        done += 1
+        _res.update(phase="計算波束指標", current=done)
         try:
-            d = r3.get_solution_data()
-            _, vals = d.get_expression_data(expression="dB(rETotal)", formula="real")
-            vals = [float(v) for v in vals]
-            thetas = [float(t) for t in d.variation_values("Theta")]
-            phis = [float(f) for f in d.variation_values("Phi")]
-            n_phi = len(phis)
-            upper = [(v, thetas[i // n_phi], phis[i % n_phi])
-                     for i, v in enumerate(vals) if thetas[i // n_phi] <= 90]
-            up_peak, up_th, up_ph = max(upper, key=lambda x: x[0]) if upper else (float("nan"),) * 3
             lam = 300.0 / freq_ghz if freq_ghz > 0 else 30.0
             ap = ap_mm if ap_mm else config.num_elements * config.unit_cell_size
             summary.update({
                 "design_theta": config.beam_theta, "design_phi": config.beam_phi,
-                "rcs_peak_dbsm": round(up_peak + 10.99, 1),   # +10*log10(4π)
-                "reflect_theta": up_th, "reflect_phi": up_ph,
                 "aperture_lambda": round(ap / lam, 2),
                 "directivity_theory_db": round(10 * math.log10(4 * math.pi * ap * ap / (lam * lam)), 1),
-                "resolution": 2,  # 指向誤差以 2° 步進的切面資料為準
+                "resolution": 2,
             })
-            # 兩個主平面切面：峰值方向（2° 解析度）、3dB 波束寬、旁瓣電平
-            for phi_lbl, key in (("0deg", "phi0"), ("90deg", "phi90")):
-                dc = hfss.post.get_solution_data(
-                    expressions="dB(rETotal)", report_category="Far Fields",
-                    context="FarField_Cuts", setup_sweep_name=sweep,
-                    variations={"Freq": [freq_str], "Phi": [phi_lbl]},
-                    primary_sweep_variable="Theta")
-                if dc:
-                    th = [float(t) for t in dc.primary_sweep_values]
-                    _, vv = dc.get_expression_data(expression="dB(rETotal)", formula="real")
-                    pts = [(t, float(x)) for t, x in zip(th, vv) if abs(t) <= 90]
-                    m = _cut_metrics([q[0] for q in pts], [q[1] for q in pts])
-                    if m:
-                        summary[key] = m
-            # 指向誤差以 phi=0 切面峰值為準（解析度較佳）
-            ref_th = summary.get("phi0", {}).get("peak_theta", up_th)
-            summary["reflect_theta"] = ref_th
-            summary["theta_error"] = round(abs(ref_th - config.beam_theta), 1)
+            if config.want_cuts:
+                for phi_lbl, key in (("0deg", "phi0"), ("90deg", "phi90")):
+                    dc = hfss.post.get_solution_data(
+                        expressions="dB(rETotal)", report_category="Far Fields",
+                        context="FarField_Cuts", setup_sweep_name=sweep,
+                        variations={"Freq": [freq_str], "Phi": [phi_lbl]},
+                        primary_sweep_variable="Theta")
+                    if dc:
+                        th = [float(t) for t in dc.primary_sweep_values]
+                        _, vv = dc.get_expression_data(expression="dB(rETotal)", formula="real")
+                        pts = [(t, float(x)) for t, x in zip(th, vv) if abs(t) <= 90]
+                        m = _cut_metrics([q[0] for q in pts], [q[1] for q in pts])
+                        if m:
+                            summary[key] = m
+                # 峰值取兩切面中較高者；RCS = 4π|rE|²/|Einc|²（Einc 預設 1 V/m）
+                peaks = [summary[k]["peak_db"] for k in ("phi0", "phi90") if k in summary]
+                if peaks:
+                    summary["rcs_peak_dbsm"] = round(max(peaks) + 10.99, 1)
+                ref = summary.get("phi0") or summary.get("phi90")
+                if ref:
+                    summary["reflect_theta"] = ref["peak_theta"]
+                    summary["theta_error"] = round(abs(ref["peak_theta"] - config.beam_theta), 1)
+            else:
+                summary["beam_note"] = "未產生遠場切面圖，無法計算波束寬與旁瓣電平。"
         except Exception as e:
             summary["beam_note"] = f"波束指標計算失敗：{e}"
+        publish()
+
+        # ④ 三維立體方向圖（選用）——方向數 = (180/step+1) × (360/step)，
+        #    step 10° 約 684 個方向，5° 則約 2664 個，時間差約 4 倍。
+        if config.want_3d:
+            done += 1
+            step3d = max(2.0, float(config.pattern3d_step or 10.0))
+            _res.update(phase=f"產生 3D 方向圖（{step3d:g}° 取樣，較耗時）", current=done)
+            try:
+                sph = f"FarField_3D_{step3d:g}".replace(".", "p")
+                if sph not in [f.name for f in hfss.field_setups]:
+                    hfss.insert_infinite_sphere(
+                        theta_start=0, theta_stop=180, theta_step=step3d,
+                        phi_start=0, phi_stop=360 - step3d, phi_step=step3d,
+                        name=sph)
+                r3 = hfss.post.create_report(
+                    expressions=["dB(rETotal)"], report_category="Far Fields",
+                    context=sph, setup_sweep_name=sweep,
+                    plot_type="3D Polar Plot",
+                    primary_sweep_variable="Phi", secondary_sweep_variable="Theta",
+                    variations={"Freq": [freq_str]}, plot_name="Pattern3D")
+                if r3:
+                    images["pattern3d"] = _export_report_jpg(hfss, "Pattern3D")
+            except Exception as e:
+                summary["pattern3d_note"] = f"3D 方向圖產生失敗：{e}"
+            publish()
 
         try:
             hfss.save_project()
         except Exception:
             pass
 
-        _res["images"] = images
-        _res["summary"] = summary
+        publish()
         _res["result"] = f"已產生 {len(images)} 張結果圖。"
     except Exception as e:
         _res["error"] = f"讀取模擬結果時發生錯誤：{str(e)}"
@@ -1165,7 +1210,7 @@ def _run_results(config: ArrayConfig):
         _res.update(running=False, phase="完成")
 
 @app.post("/api/results")
-def start_results(config: ArrayConfig):
+def start_results(config: ResultsOptions):
     try:
         from ansys.aedt.core import Hfss  # noqa: F401
     except ImportError:

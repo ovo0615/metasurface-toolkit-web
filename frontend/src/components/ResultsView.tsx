@@ -6,6 +6,8 @@ interface Props {
   data: ResultsStatus
   onBack: () => void
   onRefresh: () => void
+  /** 仍在讀取中的階段文字（漸進顯示時用）；已完成則為 null */
+  loadingPhase?: string | null
 }
 
 const TITLES: Record<string, { name: string; hint: string }> = {
@@ -15,7 +17,7 @@ const TITLES: Record<string, { name: string; hint: string }> = {
 }
 const ORDER = ['cuts', 'pattern3d', 'efield']
 
-export default function ResultsView({ data, onBack, onRefresh }: Props) {
+export default function ResultsView({ data, onBack, onRefresh, loadingPhase }: Props) {
   const [zoom, setZoom] = useState<string | null>(null)
   const images = data.images || {}
   const s = data.summary || {}
@@ -40,9 +42,11 @@ export default function ResultsView({ data, onBack, onRefresh }: Props) {
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             onClick={onRefresh}
+            disabled={!!loadingPhase}
             title="重新從 AEDT 讀取最新結果（會重跑，較耗時）"
             style={{
-              padding: '6px 14px', borderRadius: '4px', cursor: 'pointer',
+              padding: '6px 14px', borderRadius: '4px',
+              cursor: loadingPhase ? 'not-allowed' : 'pointer', opacity: loadingPhase ? 0.5 : 1,
               border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-muted)'
             }}
           >
@@ -59,6 +63,16 @@ export default function ResultsView({ data, onBack, onRefresh }: Props) {
           </button>
         </div>
       </div>
+
+      {loadingPhase && (
+        <div style={{
+          marginBottom: '16px', padding: '10px 12px', borderRadius: '6px',
+          background: 'rgba(171,71,188,0.15)', border: '1px solid rgba(171,71,188,0.5)',
+          fontSize: '0.88em', color: 'var(--text-main)'
+        }}>
+          ⏳ 仍在讀取：{loadingPhase}　— 以下為已完成的項目，其餘完成後會自動出現。
+        </div>
+      )}
 
       {/* 波束品質指標 */}
       {s.rcs_peak_dbsm !== undefined && (

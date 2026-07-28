@@ -99,11 +99,18 @@ export interface ResultsStatus {
   error: string | null;
 }
 
-export const startResults = async (config: ArrayConfig) => {
+export interface ResultsOptions {
+  want_efield: boolean;
+  want_cuts: boolean;
+  want_3d: boolean;
+  pattern3d_step: number;
+}
+
+export const startResults = async (config: ArrayConfig, options: ResultsOptions) => {
   const res = await fetch("/api/results", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
+    body: JSON.stringify({ ...config, ...options }),
   });
   if (!res.ok) throw new Error("Failed to start results");
   return res.json();
