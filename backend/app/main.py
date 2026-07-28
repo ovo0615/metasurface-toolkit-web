@@ -1,4 +1,7 @@
 # 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
+#
+# 設計流程改寫自 Ansys 官方 MetaSurfaceToolkit（見專案根目錄 MetaSurfaceToolkit.pdf，
+# 原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu，© 2020 ANSYS, Inc.）。
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -28,7 +31,9 @@ os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 class ArrayConfig(BaseModel):
-    mode: str
+    # 註：目前僅支援 Reflectarray（反射陣列），故未設 mode 欄位。
+    # Transmitarray（穿透陣列）需要不同的饋源擺放與單元設計，尚未實作與驗證，
+    # 之後若要支援請在此新增欄位並在 generate_preview／generate_aedt 中實際分流。
     shape: str
     frequency: float
     unit_cell_size: float
@@ -226,8 +231,7 @@ def generate_preview(config: ArrayConfig):
             
             # 3. 結合並求出陣列單元真正需要的補償相位
             # 標準相位補償公式：phi = k0 * (di - sin(theta)*(x*cos(phi0)+y*sin(phi0)))
-            # Reflectarray 與 Transmitarray 的相位分佈公式相同，
-            # 差別在於饋源擺放位置（反射式在正面、穿透式在背面）與單元設計本身。
+            # 本工具目前僅針對 Reflectarray（反射陣列）實測與驗證過。
             phase_req = k0 * (di - steering)
 
             phase = phase_req % 360
@@ -1253,6 +1257,14 @@ def release_aedt():
             return {"status": "success", "message": "目前沒有偵測到活動中的 AEDT 連線，無需釋放。"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"釋放連線時發生錯誤: {str(e)}")
+
+# ── 生產環境：託管前端建置成品（frontend/dist）──
+# 必須放在所有 /api 路由之後掛載，避免遮蔽 API 路徑。
+# 開發時（npm run dev）由 Vite 開發伺服器提供頁面，此掛載不會生效（dist 目錄通常不存在）；
+# 對外發布（GitHub 下載）時 dist 已隨版控附上，使用者僅需啟動這個後端即可，不需安裝 Node.js。
+_frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"))
+if os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

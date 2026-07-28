@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# 注意：dist（生產環境建置成品）刻意保留進版控，供 GitHub 下載後免安裝 Node.js 執行。
 dist-ssr
 *.local
 

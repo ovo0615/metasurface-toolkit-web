@@ -10,7 +10,6 @@ import './index.css'
 export default function App() {
   // 預設值對齊內建資料表 Phase_dim_PG_45.csv（140GHz 蝴蝶結單元、cell 1mm）
   const [config, setConfig] = useState<ArrayConfig>({
-    mode: "Reflectarray",
     shape: "Square",
     frequency: 140,
     unit_cell_size: 1,
@@ -440,13 +439,6 @@ export default function App() {
             )}
           </div>
 
-          <label>
-            Mode of Operation
-            <select value={config.mode} onChange={e => setConfig({...config, mode: e.target.value})} style={inputStyle}>
-              <option value="Reflectarray">Reflectarray</option>
-              <option value="Transmitarray">Transmitarray</option>
-            </select>
-          </label>
           <label>
             Shape of Array
             <select value={config.shape} onChange={e => setConfig({...config, shape: e.target.value})} style={inputStyle}>

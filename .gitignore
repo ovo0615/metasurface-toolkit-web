@@ -4,9 +4,10 @@ __pycache__/
 .venv/
 venv/
 
-# Node / 前端建置產物
+# Node
 node_modules/
-frontend/dist/
+# 注意：frontend/dist（生產環境建置成品）刻意保留進版控，
+# 讓 GitHub 下載後不需安裝 Node.js 即可執行 start.bat。
 
 # AEDT 模擬結果與暫存（只保留 .aedt / .aedtz 專案原始檔）
 *.aedtresults/
