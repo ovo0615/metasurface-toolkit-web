@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  forbidden-paths:
+    name: Forbid .venv / node_modules / .aedb in tracked files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tracked files
+        run: |
+          set -e
+          matches=$(git ls-files | grep -E '(^|/)(\.venv|node_modules)/|\.aedb(/|$)|\.aedt(\.lock)?$' || true)
+          if [ -n "$matches" ]; then
+            echo "The following files must not be committed:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "OK: no .venv, node_modules, or .aedb files tracked."
+
+  secret-and-path-scan:
+    name: Sensitive path / credential scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tracked files for local paths, credentials, license/customer info
+        run: |
+          set -e
+          pattern='D:\\|C:\\Users|\\\\[A-Za-z0-9_.-]+\\|10\.[0-9]+\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|api[_-]?key|access[_-]?token|password|secret|private[_-]?key|license.?server|customer|private-source'
+          matches=$(git grep -I -n -i -E "$pattern" -- . ':(exclude).git' ':(exclude,glob)**/dist/**' ':(exclude,glob)**/*.min.js' ':(exclude,glob)**/package-lock.json' ':(exclude,glob)**/*.lock' || true)
+          if [ -n "$matches" ]; then
+            echo "Potential sensitive content found - review each line before merging:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "OK: no obvious sensitive paths or credentials found in tracked text files."
+      - name: Reject .env / key files
+        run: |
+          set -e
+          matches=$(git ls-files | grep -E '(^|/)\.env(\..*)?$|\.pem$|\.key$|id_rsa' || true)
+          if [ -n "$matches" ]; then
+            echo "Credential-shaped files must not be committed:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "OK: no .env/credential files tracked."
+
+  python-compile-check:
+    name: Python compile check (skips if no .py files are tracked)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile all tracked Python files
+        run: |
+          set -e
+          files=$(git ls-files '*.py' || true)
+          if [ -z "$files" ]; then
+            echo "No Python files tracked on this branch - skipping."
+            exit 0
+          fi
+          python -m py_compile $files
+
+  frontend-build:
+    name: Frontend TypeScript build check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check and build
+        run: npm run build
+      - name: Confirm dist/index.html is present after build
+        run: test -f dist/index.html
+
+  frontend-dist-tracked:
+    name: frontend/dist is tracked in git (needed for Source ZIP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check dist/index.html is tracked
+        run: |
+          set -e
+          if ! git ls-files frontend/dist/index.html | grep -q index.html; then
+            echo "frontend/dist/index.html is not tracked. GitHub 'Code -> Download ZIP' would ship without a usable build."
+            exit 1
+          fi
+          echo "OK: frontend/dist is tracked."
