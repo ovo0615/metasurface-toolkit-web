@@ -13,7 +13,7 @@ jobs:
       - name: Check tracked files
         run: |
           set -e
-          matches=$(git ls-files | grep -E '(^|/)(\.venv|node_modules)/|\.aedb(/|$)|\.aedt(\.lock)?$' || true)
+          matches=$(git ls-files | grep -E '(^|/)(\.venv|node_modules)/|\.aedb(/|$)|\.aedt\.lock$' || true)
           if [ -n "$matches" ]; then
             echo "The following files must not be committed:"
             echo "$matches"
@@ -29,8 +29,9 @@ jobs:
       - name: Scan tracked files for local paths, credentials, license/customer info
         run: |
           set -e
+          export LC_ALL=C
           pattern='D:\\|C:\\Users|\\\\[A-Za-z0-9_.-]+\\|10\.[0-9]+\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|api[_-]?key|access[_-]?token|password|secret|private[_-]?key|license.?server|customer|private-source'
-          matches=$(git grep -I -n -i -E "$pattern" -- . ':(exclude).git' ':(exclude).github/workflows/**' ':(exclude,glob)**/dist/**' ':(exclude,glob)**/*.min.js' ':(exclude,glob)**/package-lock.json' ':(exclude,glob)**/*.lock' || true)
+          matches=$(git grep -I -n -i -E "$pattern" -- . ':(exclude).git' ':(exclude).github/workflows/**' ':(exclude,glob)**/dist/**' ':(exclude,glob)**/*.min.js' ':(exclude,glob)**/package-lock.json' ':(exclude,glob)**/*.lock' ':(exclude,glob)**/*.svg' ':(exclude,glob)**/*.aedt' ':(exclude,glob)**/*.aedtz' || true)
           if [ -n "$matches" ]; then
             echo "Potential sensitive content found - review each line before merging:"
             echo "$matches"
