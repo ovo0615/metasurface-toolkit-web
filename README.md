@@ -144,3 +144,5 @@ Phase_dim_PG_45.csv        內建相位對照表（140 GHz、cell 1 mm 設計用
 本專案程式碼以 [MIT License](LICENSE) 釋出。設計流程參考 Ansys 官方 MetaSurfaceToolkit 簡報
 （原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu，© 2020 ANSYS, Inc.），該簡報本身著作權
 仍屬原作者與 Ansys, Inc. 所有，未隨本專案散布，亦不受本專案 MIT License 涵蓋。
+
+本 Repository 為 Jeff Hong 個人技術作品集之公開展示內容，非 Taiwan Auto-Design Co.（TADC，虎門科技）官方帳號，亦非 Ansys, Inc. 官方合作項目；Ansys、HFSS 為 Ansys, Inc. 之商標。如需授權或合作，請洽 jeff.hong@cadmen.com。
