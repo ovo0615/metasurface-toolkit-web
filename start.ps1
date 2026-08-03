@@ -41,51 +41,75 @@ if (-not (Test-Path $distIndex)) {
 }
 
 # --- 1. 尋找相容的 64 位元 Python（3.9~3.12），必要時建立虛擬環境 ---
+function Get-PythonSignature {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [string[]]$Prefix = @()
+    )
+    # py.exe 找不到指定版本時會寫入 stderr（"No suitable Python runtime found"）。
+    # 在 $ErrorActionPreference = "Stop" 下，即使用 2>$null 導向，PowerShell 5.1
+    # 仍會先把該行 stderr 包成終止例外(NativeCommandError)才套用重導向，導致腳本中止。
+    # 必須用 try/catch 吞掉，才能繼續嘗試下一個版本。
+    try {
+        $arguments = @()
+        if ($Prefix.Count -gt 0) { $arguments += $Prefix }
+        $arguments += @("-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        $verOut = & $Exe @arguments 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        if ($verOut -match "^3\.(9|10|11|12)$") { return [string]$verOut }
+        return $null
+    } catch {
+        return $null
+    }
+}
+
 function Find-CompatiblePython {
-    $candidates = @()
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        foreach ($ver in @("3.12", "3.11", "3.10", "3.9")) {
-            # py.exe 找不到指定版本時會寫入 stderr（"No suitable Python runtime found"）。
-            # 在 $ErrorActionPreference = "Stop" 下，即使用 2>$null 導向，PowerShell 5.1
-            # 仍會先把該行 stderr 包成終止例外(NativeCommandError)才套用重導向，導致腳本中止。
-            # 必須用 try/catch 吞掉，才能繼續嘗試下一個版本。
-            try {
-                & py "-$ver-64" -c "exit()" 2>$null
-                if ($LASTEXITCODE -eq 0) { $candidates += "py -$ver-64" }
-            } catch { }
-        }
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($ver in @("3.12", "3.11", "3.10", "3.9")) {
+        $candidates.Add([pscustomobject]@{ Exe = "py"; Prefix = @("-$ver-64") })
     }
     foreach ($cmd in @("python3.12", "python3.11", "python3.10", "python3.9", "python")) {
-        if (Get-Command $cmd -ErrorAction SilentlyContinue) {
-            try {
-                $verOut = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-                if ($verOut -match "^3\.(9|10|11|12)$") { $candidates += $cmd }
-            } catch { }
-        }
+        $candidates.Add([pscustomobject]@{ Exe = $cmd; Prefix = @() })
     }
-    return $candidates
+    foreach ($candidate in $candidates) {
+        if (-not (Get-Command $candidate.Exe -ErrorAction SilentlyContinue)) { continue }
+        $version = Get-PythonSignature -Exe $candidate.Exe -Prefix $candidate.Prefix
+        if (-not $version) { continue }
+        return [pscustomobject]@{ Exe = $candidate.Exe; Prefix = $candidate.Prefix; Version = $version }
+    }
+    return $null
 }
 
 if (-not (Test-Path $py)) {
     Write-Host "[1/3] 尚未建立虛擬環境,尋找相容的 Python（3.9~3.12,64 位元）..." -ForegroundColor Yellow
-    $found = Find-CompatiblePython
-    if ($found.Count -eq 0) {
+    $pythonInfo = Find-CompatiblePython
+    if ($null -eq $pythonInfo) {
         Write-Host "       找不到相容版本,嘗試以 WinGet 安裝 Python 3.12（僅新增,不影響現有版本）..." -ForegroundColor Yellow
         if (Get-Command winget -ErrorAction SilentlyContinue) {
-            winget install --id Python.Python.3.12 --exact --source winget --scope user `
-                --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-            $found = Find-CompatiblePython
+            try {
+                winget install --id Python.Python.3.12 --exact --source winget --scope user `
+                    --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            } catch { }
+            $pythonInfo = Find-CompatiblePython
         }
-        if ($found.Count -eq 0) {
+        if ($null -eq $pythonInfo) {
             Write-Host "【錯誤】找不到相容的 64 位元 Python,且無法自動安裝。" -ForegroundColor Red
             Write-Host "        請至 https://www.python.org/downloads/ 手動安裝 Python 3.10（建議）,或洽 IT 協助。" -ForegroundColor Red
             Read-Host "        按 Enter 結束"
             exit 1
         }
     }
-    $pythonCmd = $found[0]
-    Write-Host "       使用 $pythonCmd 建立虛擬環境..." -ForegroundColor Yellow
-    Invoke-Expression "$pythonCmd -m venv `"$venv`""
+    $label = if ($pythonInfo.Prefix.Count -gt 0) { "$($pythonInfo.Exe) $($pythonInfo.Prefix -join ' ')" } else { $pythonInfo.Exe }
+    Write-Host "       使用 $label 建立虛擬環境..." -ForegroundColor Yellow
+    $venvArgs = @()
+    if ($pythonInfo.Prefix.Count -gt 0) { $venvArgs += $pythonInfo.Prefix }
+    $venvArgs += @("-m", "venv", $venv)
+    & $pythonInfo.Exe @venvArgs
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $py)) {
+        Write-Host "【錯誤】建立虛擬環境失敗。" -ForegroundColor Red
+        Read-Host "        按 Enter 結束"
+        exit 1
+    }
 } else {
     Write-Host "[1/3] 虛擬環境已存在,略過建立。" -ForegroundColor Green
 }
@@ -118,18 +142,78 @@ if ($existing) {
     exit 1
 }
 
-# --- 4. 啟動（前景執行；關閉此視窗即停止服務）---
+# --- 4. 啟動:服務以子程序執行,主程序輪詢就緒後才開啟瀏覽器 ---
 Write-Host "[3/3] 啟動服務 http://127.0.0.1:$PORT ..." -ForegroundColor Yellow
 Write-Host "      所有資料處理皆在本機進行,不會上傳雲端。關閉此視窗即可結束程式。" -ForegroundColor DarkGray
+Write-Host ""
 
-# 背景輪詢服務就緒狀態,就緒後才開啟瀏覽器（最多等 30 秒）
-Start-Job -ScriptBlock {
-    param($port)
+# ---------------------------------------------------------------------------
+# 為什麼不用 Start-Job 開瀏覽器（實際事故,勿改回去,詳見 ansys-gs-hub/start.ps1）
+#
+# 舊版用 Start-Job 開一個背景工作輪詢連接埠、就緒後開啟瀏覽器。Start-Job 會
+# 另外啟動一個 PowerShell 子程序執行序列化的 script block,這正是防毒軟體的
+# 行為偵測特徵,實測會被判定為可疑行為攔截,導致瀏覽器完全沒開、使用者連
+# 錯誤訊息都看不到。
+#
+# 現在改成:uvicorn 以子程序執行（啟動的是 python.exe,不是 PowerShell）,
+# 主程序自己輪詢連接埠、就緒後直接開瀏覽器,開啟失敗時把網址印出來。
+# ---------------------------------------------------------------------------
+
+$appUrl = "http://127.0.0.1:$PORT"
+$server = $null
+try {
+    $server = Start-Process -FilePath $py `
+        -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$PORT", "--app-dir", $backend) `
+        -NoNewWindow -PassThru
+
+    $ready = $false
     for ($i = 0; $i -lt 60; $i++) {
+        if ($server.HasExited) { break }
         Start-Sleep -Milliseconds 500
-        $ok = Test-NetConnection -ComputerName 127.0.0.1 -Port $port -InformationLevel Quiet -WarningAction SilentlyContinue
-        if ($ok) { Start-Process "http://127.0.0.1:$port"; break }
+        $ok = Test-NetConnection -ComputerName 127.0.0.1 -Port $PORT -InformationLevel Quiet -WarningAction SilentlyContinue
+        if ($ok) { $ready = $true; break }
     }
-} -ArgumentList $PORT | Out-Null
 
-& $py -m uvicorn app.main:app --host 127.0.0.1 --port $PORT --app-dir $backend
+    if ($ready) {
+        $opened = $false
+        try {
+            Start-Process $appUrl
+            $opened = $true
+        } catch { }
+        Write-Host ""
+        if ($opened) {
+            Write-Host "服務已就緒,已開啟瀏覽器:$appUrl" -ForegroundColor Green
+        } else {
+            Write-Host "服務已就緒,但無法自動開啟瀏覽器。請自行在瀏覽器輸入下列網址:" -ForegroundColor Red
+            Write-Host "    $appUrl" -ForegroundColor Cyan
+        }
+    } elseif (-not $server.HasExited) {
+        Write-Host ""
+        Write-Host "服務啟動逾時,仍未回應。請自行在瀏覽器輸入下列網址確認:" -ForegroundColor Red
+        Write-Host "    $appUrl" -ForegroundColor Cyan
+    }
+    Write-Host ""
+
+    if (-not $server.HasExited) {
+        Wait-Process -Id $server.Id
+    }
+} finally {
+    if ($null -ne $server) {
+        try {
+            if (-not $server.HasExited) {
+                & taskkill /PID $server.Id /T /F | Out-Null
+                Start-Sleep -Milliseconds 500
+            }
+        } catch { }
+        try {
+            if (-not $server.HasExited) { $server.Kill() }
+        } catch { }
+    }
+    Write-Host ""
+    $leftover = Get-NetTCPConnection -LocalPort $PORT -State Listen -ErrorAction SilentlyContinue
+    if ($leftover) {
+        Write-Host "服務已結束,但連接埠 $PORT 仍被佔用（PID $($leftover[0].OwningProcess)）。" -ForegroundColor Red
+    } else {
+        Write-Host "服務已結束,連接埠 $PORT 已釋放。" -ForegroundColor Green
+    }
+}

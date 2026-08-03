@@ -22,10 +22,8 @@ SOFTWARE.
 
 ---
 
-Note: This license applies to the original code written for this project
-(the web application under `backend/` and `frontend/`). It does not apply to
-`MetaSurfaceToolkit.pdf` and `Metasurface_ToolkitV3/`, which are the original
-Ansys MetaSurfaceToolkit presentation and desktop tool (© 2020 ANSYS, Inc.,
-authored by Sharon Varghese, Nijas Kunju, and Mahesh Babu), included here for
-design reference only. Their copyright remains with the original authors and
-ANSYS, Inc.
+Note: This project's design workflow (phase-compensation formulas, reflectarray
+modeling steps) was adapted from Ansys's official MetaSurfaceToolkit presentation
+(© 2020 ANSYS, Inc., authored by Sharon Varghese, Nijas Kunju, and Mahesh Babu).
+That original presentation is not included in this repository and is not covered
+by this license; its copyright remains with the original authors and ANSYS, Inc.

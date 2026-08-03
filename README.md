@@ -7,9 +7,11 @@
 ## 原作者歸屬
 
 本專案的設計流程（相位補償公式、Reflectarray 建模步驟）改寫自 Ansys 官方 **MetaSurfaceToolkit**
-簡報（`MetaSurfaceToolkit.pdf`，收錄於本專案根目錄），原作者為：
+簡報，原作者為：
 
 > © 2020 ANSYS, Inc. — Sharon Varghese、Nijas Kunju、Mahesh Babu
+
+原簡報為 Ansys, Inc. 版權所有之官方教材，未包含於本專案，請透過 Ansys 官方管道取得。
 
 原版為 AEDT 內建的 IronPython 桌面工具。本專案將其設計流程重新實作為 React + FastAPI 的網頁應用，
 並擴充了 UnitCell 相位自動掃描、HFSS 全自動建模、模擬結果讀取（遠場方向圖、波束品質指標等）等原版沒有的功能。
@@ -132,7 +134,6 @@ docs/操作說明.md            完整操作說明與截圖
 Butterfly_element.aedtz    蝴蝶結單元範例專案（10 GHz、cell 8 mm）
 Butterfly_Phase_dim_TEST.csv  蝴蝶結示範用相位表（合成資料，非模擬結果）
 Phase_dim_PG_45.csv        內建相位對照表（140 GHz、cell 1 mm 設計用）
-MetaSurfaceToolkit.pdf     原版 Ansys 工具簡報（原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu）
 ```
 
 執行期產生的檔案以專案名稱為前綴：`_master.aedt`（母本）、`_array.aedt`（陣列成品）、
@@ -140,5 +141,6 @@ MetaSurfaceToolkit.pdf     原版 Ansys 工具簡報（原作者：Sharon Varghe
 
 ## 授權
 
-本專案以 [MIT License](LICENSE) 釋出。`MetaSurfaceToolkit.pdf` 為 Ansys 原版工具簡報，
-其著作權仍屬原作者與 Ansys, Inc. 所有，僅作為設計參考附於本專案中。
+本專案程式碼以 [MIT License](LICENSE) 釋出。設計流程參考 Ansys 官方 MetaSurfaceToolkit 簡報
+（原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu，© 2020 ANSYS, Inc.），該簡報本身著作權
+仍屬原作者與 Ansys, Inc. 所有，未隨本專案散布，亦不受本專案 MIT License 涵蓋。

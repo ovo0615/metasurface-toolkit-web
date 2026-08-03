@@ -1,7 +1,7 @@
 # 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
 #
-# 設計流程改寫自 Ansys 官方 MetaSurfaceToolkit（見專案根目錄 MetaSurfaceToolkit.pdf，
-# 原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu，© 2020 ANSYS, Inc.）。
+# 設計流程改寫自 Ansys 官方 MetaSurfaceToolkit 簡報
+# （原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu，© 2020 ANSYS, Inc.）。
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
