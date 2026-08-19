@@ -1,7 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react'
 
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供
-
 export interface PreviewData {
   layers: Record<string, any[]>
   layer_colors?: Record<string, number[]>

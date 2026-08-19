@@ -1,4 +1,3 @@
-// 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
 import React, { useState, useEffect, useRef } from 'react'
 import Preview2D from './components/Preview2D'
 import ResultsView from './components/ResultsView'
@@ -365,8 +364,7 @@ export default function App() {
         </div>
         <div style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', marginBottom: '16px' }} />
         <h2 style={{ color: 'var(--accent)', marginTop: 0 }}>Metasurface Toolkit</h2>
-        <p style={{ fontSize: '0.9em', color: 'var(--text-muted)' }}>此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供</p>
-        
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '20px' }}>
           
           <div style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '6px' }}>
