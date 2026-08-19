@@ -1,4 +1,3 @@
-// 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
 export interface ArrayConfig {
   // 目前僅支援 Reflectarray（反射陣列），故無 mode 欄位；
   // Transmitarray 需要不同饋源擺放與單元設計，尚未實作與驗證。

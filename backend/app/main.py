@@ -1,5 +1,3 @@
-# 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
-#
 # 設計流程改寫自 Ansys 官方 MetaSurfaceToolkit 簡報
 # （原作者：Sharon Varghese、Nijas Kunju、Mahesh Babu，© 2020 ANSYS, Inc.）。
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -646,7 +644,6 @@ def _run_generate(config: ArrayConfig):
 def generate_aedt(config: ArrayConfig):
     # 啟動背景建模作業後立即回傳；進度由 /api/generate/status 查詢，
     # /api/generate/cancel 可隨時取消。
-    # 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
     try:
         from ansys.aedt.core import Hfss  # noqa: F401
     except ImportError:

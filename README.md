@@ -2,8 +2,6 @@
 
 超穎表面（Metasurface）反射陣列設計工具的 Web 版本：依饋源位置與波束方向計算每個陣列單元所需的補償相位，透過「相位 → 尺寸（Lx）」對照表內插出實際單元尺寸，再經由 PyAEDT 直接在 Ansys HFSS 中產生完整陣列模型、建立模擬環境並讀取結果。
 
-> 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供
-
 ## 原作者歸屬
 
 本專案的設計流程（相位補償公式、Reflectarray 建模步驟）改寫自 Ansys 官方 **MetaSurfaceToolkit**

@@ -1,4 +1,3 @@
-# 此工具由虎門科技資深技術工程師Jeff Hong洪敬傑提供
 import ScriptEnv
 ScriptEnv.Initialize("Ansoft.ElectronicsDesktop")
 oDesktop.RestoreWindow()
